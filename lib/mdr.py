@@ -24,6 +24,12 @@ RESULT_INPROGRESS = 1
 
 AVAILABILITY = {0: "unknown", 1: "unavailable", 2: "available"}
 
+PACKET_RX, PACKET_TX = 0, 1
+# Frame layout is [start][data type][seq][len:4][payload][checksum][end], so the
+# type is the second byte. An inbound frame of type ACK is the device saying it
+# received the last command -- the one real acknowledgement this protocol gives.
+DATA_TYPE_ACK = 1
+
 # Asking beats trying. A write to an unsupported endpoint is staged, committed
 # and silently dropped -- the library only puts it on the wire if the device
 # advertised support -- so an unsupported control looks exactly like a working
@@ -145,6 +151,10 @@ class Listening(C.Structure):
     ]
 
 
+# void (*)(void* user, MDRPacketDirection, const unsigned char*, int)
+PACKET_CALLBACK = C.CFUNCTYPE(None, C.c_void_p, C.c_uint32, C.POINTER(C.c_ubyte), C.c_int)
+
+
 class MDRError(RuntimeError):
     pass
 
@@ -204,6 +214,8 @@ class Library:
                                  C.POINTER(Listening))
         self.get_feature = sig(self.mdr, "mdrHeadphonesGetFeature", u32, p, u32,
                                C.POINTER(u32))
+        self.set_packet_cb = sig(self.mdr, "mdrHeadphonesSetPacketCallback", None, p,
+                                 PACKET_CALLBACK, p)
         self._result_string = sig(self.mdr, "mdrResultString", C.c_char_p, u32)
 
     def result(self, code):
@@ -327,6 +339,21 @@ class Headphones:
         if ambient_level is not None:
             nc.ambient_level = max(0, min(AMBIENT_LEVEL_MAX, int(ambient_level)))
         return self.set_noise_control(nc)
+
+    def watch_packets(self, fn):
+        """Call fn(direction, frame_bytes) for every frame on the wire.
+
+        Runs inside the library's parsing, so it must do almost nothing. The
+        reference has to be kept alive on the instance or ctypes will collect
+        the thunk and the library will call into freed memory.
+        """
+        def trampoline(_user, direction, frame, size):
+            try:
+                fn(int(direction), bytes(bytearray(frame[:size])))
+            except Exception:
+                pass                      # never let an exception cross the ABI
+        self._packet_cb = PACKET_CALLBACK(trampoline)
+        self.lib.set_packet_cb(self._hp, self._packet_cb, None)
 
     def feature(self, name):
         """'available', 'unavailable' or 'unknown'."""

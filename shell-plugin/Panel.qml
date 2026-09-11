@@ -128,6 +128,10 @@ Panel {
   // almost certainly in effect; this API simply does not acknowledge a
   // session's own writes.
   readonly property var unconfirmed: state.unconfirmed !== undefined ? state.unconfirmed : []
+  // Stronger than "unconfirmed": the device did not even acknowledge the
+  // command. The protocol does ACK every command, so silence here is a real
+  // failure rather than the usual missing echo.
+  readonly property var unacknowledged: state.unacknowledged !== undefined ? state.unacknowledged : []
   readonly property string unconfirmedText: {
     if (unconfirmed.length === 0) return ""
     var names = { mode: "noise mode", ambient_level: "ambient level",
@@ -140,6 +144,18 @@ Panel {
     for (var i = 0; i < unconfirmed.length; i++)
       out.push(names[unconfirmed[i]] || unconfirmed[i])
     return "Set, but not echoed back yet: " + out.join(", ") + "."
+  }
+
+  readonly property string unackedText: {
+    if (unacknowledged.length === 0) return ""
+    var names = { mode: "noise mode", ambient_level: "ambient level",
+                  eq_bands: "bands", eq_clear_bass: "clear bass", dsee: "DSEE",
+                  audio_priority: "connection", power_off: "switch off",
+                  auto_pause: "auto pause" }
+    var out = []
+    for (var i = 0; i < unacknowledged.length; i++)
+      out.push(names[unacknowledged[i]] || unacknowledged[i])
+    return "No answer from the headphones for: " + out.join(", ") + "."
   }
 
   readonly property var eqPresets: [
@@ -754,10 +770,10 @@ Panel {
         // One line covering every field, because the reason is always the same:
         // the headphones do not acknowledge a session's own writes.
         Text {
-          visible: root.unconfirmedText !== ""
+          visible: root.unackedText !== "" || root.unconfirmedText !== ""
           width: parent.width
-          text: root.unconfirmedText
-          color: root.dim
+          text: root.unackedText !== "" ? root.unackedText : root.unconfirmedText
+          color: root.unackedText !== "" ? root.urgent : root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap

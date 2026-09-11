@@ -71,6 +71,16 @@ class Daemon:
         self._features = {}
         # Connections that asked to be told about changes instead of polling.
         self.subscribers = []
+        # Frames the device has acknowledged. The protocol does answer every
+        # command -- the library waits for that ACK and retries without it --
+        # it just never surfaced it, so writes looked unverifiable when the
+        # headphones had been replying all along.
+        self.acks = 0
+        # A command the device does not acknowledge is resent with the sequence
+        # bit flipped, which costs a full second each time. Counting those makes
+        # the tax visible instead of merely felt.
+        self.retransmits = 0
+        self._last_tx = None
 
     # -- session ---------------------------------------------------------
 
@@ -105,6 +115,7 @@ class Daemon:
             # wait was 200 ms on every single action.
             hp.write_settle = 0.0
             hp.open()
+            hp.watch_packets(self.on_packet)
         except mdr.MDRError as e:
             self.error = str(e)
             self.next_attempt = time.monotonic() + self.backoff
@@ -120,6 +131,21 @@ class Daemon:
             self._features = self.hp.features()
         except mdr.MDRError:
             self._features = {}
+
+    def on_packet(self, direction, frame):
+        if len(frame) < 3:
+            return
+        if direction == mdr.PACKET_RX:
+            if frame[1] == mdr.DATA_TYPE_ACK:
+                self.acks += 1
+            return
+        if frame[1] == mdr.DATA_TYPE_ACK:
+            return                        # our own acknowledgement of their frame
+        # Same payload going out again means the first attempt went unanswered.
+        body = frame[2:]
+        if self._last_tx is not None and self._last_tx[2:] == body[:len(self._last_tx) - 2]:
+            self.retransmits += 1
+        self._last_tx = frame
 
     def drop(self, why):
         if self.hp:
@@ -217,16 +243,25 @@ class Daemon:
     def apply_claims(self, s):
         """Show what we asked for until the device's own reading moves."""
         now = time.monotonic()
-        unconfirmed = []
+        unconfirmed, unacked = [], []
         for field in list(self.claims):
-            value, baseline, when = self.claims[field]
+            value, baseline, when, acks_at_write = self.claims[field]
             raw = s.get(field)
             if raw != baseline or now - when > self.CLAIM_TTL:
                 del self.claims[field]   # the device moved, or we waited enough
                 continue
             s[field] = value
             unconfirmed.append(field)
+            # Writes are serialised here, so the next ACK after one belongs to
+            # it. Not a guarantee of *what* the device did with the command --
+            # a preset write is acknowledged and ignored -- only that the
+            # command arrived. Silence, though, means it did not.
+            if self.acks <= acks_at_write and now - when > 1.0:
+                unacked.append(field)
         s["unconfirmed"] = sorted(unconfirmed)
+        s["unacknowledged"] = sorted(unacked)
+        s["acks"] = self.acks
+        s["retransmits"] = self.retransmits
         s["mode_confirmed"] = "mode" not in self.claims
         return s
 
@@ -235,7 +270,7 @@ class Daemon:
         baseline = self.state.get(field)
         if field in self.claims:
             baseline = self.claims[field][1]   # keep the pre-claim reading
-        self.claims[field] = (value, baseline, time.monotonic())
+        self.claims[field] = (value, baseline, time.monotonic(), self.acks)
 
     def publish(self, s):
         """Write the state file, and keep writing it even when nothing changes.
@@ -295,10 +330,10 @@ class Daemon:
             self.drop(str(e))
             return {"ok": False, "error": str(e)}
         # Do not wait for a read-back. The write lands; the echo may never come.
-        self.claims["mode"] = (mode, baseline, time.monotonic())
+        self.claim("mode", mode)
+        self.claims["mode"] = (mode, baseline, time.monotonic(), self.claims["mode"][3])
         if level is not None:
-            self.claims["ambient_level"] = (
-                int(nc.ambient_level), self.state.get("ambient_level"), time.monotonic())
+            self.claim("ambient_level", int(nc.ambient_level))
         return {"ok": True, "mode": mode, "confirmed": False}
 
     def simple(self, action, field=None, value=None):
