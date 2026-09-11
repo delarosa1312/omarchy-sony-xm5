@@ -192,19 +192,23 @@ class Headphones:
             raise MDRError(f"noise control read failed: {self.lib.result(r)}")
         return nc
 
-    def set_noise_control(self, nc, confirm_timeout=3.0):
-        """Write a noise-control state and wait for the device to echo it back."""
+    def set_noise_control(self, nc, settle=0.2):
+        """Write a noise-control state and commit it.
+
+        Deliberately does not wait for a read-back. A session is not reliably
+        told about its own writes -- the cached value can keep reporting the old
+        mode for a minute while the headphones have audibly changed -- so
+        waiting for confirmation turns a write that worked into an error. The
+        write landing is the success; pump briefly to get it onto the wire.
+        """
         r = self.lib.set_noise(self._hp, C.byref(nc))
         if r != RESULT_OK:
             raise MDRError(f"noise control write failed: {self.lib.result(r)}")
         self.lib.hp_commit(self._hp)
-        deadline = time.monotonic() + confirm_timeout
+        deadline = time.monotonic() + settle
         while time.monotonic() < deadline:
-            self.pump(50)
-            current = self.get_noise_control()
-            if current.mode == nc.mode:
-                return current
-        raise MDRError("device did not confirm the new noise-control state")
+            self.pump(20)
+        return nc
 
     def set_noise_mode(self, mode, ambient_level=None):
         """mode: 'off', 'cancelling' or 'ambient'."""

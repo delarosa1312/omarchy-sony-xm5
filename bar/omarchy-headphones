@@ -1,0 +1,62 @@
+#!/bin/bash
+# Omarchy bar widget: Sony WH-1000XM5 battery and noise mode.
+#
+# Reads only mdrctld's state file, so it costs a file read however often the
+# bar ticks -- the Bluetooth session is held by the daemon, not opened here.
+# One bar instance runs per monitor, so this must stay stateless.
+#
+# Click cycles the noise mode. Prints nothing when the headphones are away, so
+# the widget disappears instead of showing a dead entry.
+set -uo pipefail
+
+MDRCTL="$(dirname "$(readlink -f "$0")")/../bin/mdrctl"
+
+json=$("$MDRCTL" status --json 2>/dev/null) || json=""
+[[ -z $json ]] && { echo '{"text":"","tooltip":""}'; exit 0; }
+
+read -r present session mode confirmed battery charging level lmax button src err < <(
+  jq -r '[(.present//false), (.session//false), (.mode//"-"), (.mode_confirmed//true),
+          (.battery//"-"), (.charging//"-"), (.ambient_level//"-"),
+          (.ambient_level_max//"-"), (.button_mode//"-"),
+          (.battery_source//"-"), (.error//"-")] | @tsv' <<<"$json" | tr '\t' ' '
+)
+
+[[ $present != true ]] && { echo '{"text":"","tooltip":""}'; exit 0; }
+
+case $mode in
+  cancelling) tag="NC" ;;
+  ambient)    tag="AMB" ;;
+  off)        tag="OFF" ;;
+  *)          tag="" ;;
+esac
+# A mode we asked for but the device has not echoed back. It is almost
+# certainly in effect -- this API just does not confirm your own writes.
+[[ $confirmed == false ]] && tag+="?"
+
+text=$(printf '\U000f02cb  %s' "$tag")
+[[ $battery != "-" ]] && text+="  ${battery}%"
+[[ $charging == yes ]] && text+="+"
+
+tooltip="WH-1000XM5"
+[[ $battery != "-" ]] && tooltip+="
+battery  ${battery}%  (${src})"
+[[ $charging == yes ]] && tooltip+="  charging"
+if [[ $session == true ]]; then
+  tooltip+="
+mode  ${mode}"
+  [[ $mode == ambient && $level != "-" ]] && tooltip+="  level ${level} of ${lmax}"
+  [[ $confirmed == false ]] && tooltip+="  (requested, not echoed back)"
+  tooltip+="
+button  ${button}"
+else
+  tooltip+="
+no control session -- battery only
+start it with  systemctl --user start mdrctld"
+fi
+[[ $err != "-" && $err != null ]] && tooltip+="
+${err}"
+tooltip+="
+
+click to cycle the noise mode"
+
+jq -cn --arg text "$text" --arg tooltip "$tooltip" '{text: $text, tooltip: $tooltip}'

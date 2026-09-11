@@ -1,0 +1,19 @@
+[Unit]
+Description=Hold the Sony MDR control session for mdrctl
+Documentation=https://github.com/mos9527/SonyHeadphonesClient
+After=bluetooth.target
+# Session-scoped: without PartOf it survives logout and keeps the headphones'
+# single control session to itself, with nobody at the keyboard.
+PartOf=graphical-session.target
+# The headset comes and goes; the daemon retries on its own, so a burst of
+# failures is normal and must not trip the start limiter.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=%h/Documents/Projects/Personal/Utils/mdrctl/bin/mdrctld
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

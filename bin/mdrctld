@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""Hold the one control session the headphones allow, and lend it out.
+
+The device permits a single MDR session at a time and the handshake costs
+several seconds, so nothing short-lived can talk to it: a bar widget that
+connected on every refresh would spend its life handshaking and would lock the
+phone app out anyway. This daemon owns the session, keeps a picture of the
+state, and answers cheap questions about it over a Unix socket.
+
+Stop it (`systemctl --user stop mdrctld`) before using Sony's app.
+"""
+import json, os, socket, sys, time, subprocess, signal, errno
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+import mdr
+
+MAC = os.environ.get("MDR_MAC", "00:00:5E:00:53:01")
+BUILD = os.environ.get(
+    "MDR_BUILD",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "vendor",
+                 "SonyHeadphonesClient", "build"),
+)
+RUNDIR = os.path.join(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"), "mdrctl")
+SOCKET = os.path.join(RUNDIR, "sock")
+STATE = os.path.join(RUNDIR, "state.json")
+
+# Cycling order for a bar click. Ambient last so a stray click lands on a mode
+# you can hear yourself out of.
+CYCLE = ["cancelling", "ambient", "off"]
+
+
+def bluez_path(mac):
+    """BlueZ object path for a device, adapter discovered by trying a few."""
+    dev = "dev_" + mac.replace(":", "_").upper()
+    for i in range(4):
+        path = f"/org/bluez/hci{i}/{dev}"
+        if bluez_get(path, "org.bluez.Device1", "Connected") is not None:
+            return path
+    return None
+
+
+def bluez_get(path, iface, prop):
+    """One property, or None. Shelling out beats a D-Bus dependency here: this
+    is called once every few seconds, and only while we have no session."""
+    try:
+        out = subprocess.run(["busctl", "get-property", "org.bluez", path, iface, prop],
+                             capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if out.returncode != 0:
+        return None
+    parts = out.stdout.split()
+    return parts[1] if len(parts) > 1 else None
+
+
+class Daemon:
+    def __init__(self):
+        self.lib = mdr.Library(BUILD)
+        self.hp = None
+        self.path = None
+        self.state = {}
+        # What we last told the device to do, and what it was reporting when we
+        # said it. The device does not echo our own writes back to us, so we
+        # keep showing what we asked for until its reading actually moves --
+        # that move is the only evidence it has something new to say.
+        self.claim = None
+        self.claim_baseline = None
+        self.next_attempt = 0.0
+        self.backoff = 2.0
+        self.error = None
+
+    # -- session ---------------------------------------------------------
+
+    def present(self):
+        """Is the headset connected to the machine at all (BlueZ's view)?"""
+        if self.path is None:
+            self.path = bluez_path(MAC)
+            if self.path is None:
+                return False
+        return bluez_get(self.path, "org.bluez.Device1", "Connected") == "true"
+
+    def bluez_battery(self):
+        """Battery without a session. BlueZ gets this from the HFP indicator,
+        so the widget still shows a level while the daemon is stopped."""
+        v = bluez_get(self.path, "org.bluez.Battery1", "Percentage") if self.path else None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    def connect(self):
+        if time.monotonic() < self.next_attempt:
+            return
+        if not self.present():
+            self.error = "headset not connected"
+            self.next_attempt = time.monotonic() + 5.0
+            return
+        try:
+            hp = mdr.Headphones(self.lib, MAC)
+            hp.open()
+        except mdr.MDRError as e:
+            self.error = str(e)
+            self.next_attempt = time.monotonic() + self.backoff
+            self.backoff = min(self.backoff * 2, 60.0)
+            return
+        self.hp, self.error, self.backoff = hp, None, 2.0
+        self.claim = None
+
+    def drop(self, why):
+        if self.hp:
+            try:
+                self.hp.close()
+            except Exception:
+                pass
+        self.hp = None
+        self.error = why
+        self.claim = None
+        self.next_attempt = time.monotonic() + self.backoff
+
+    # -- state -----------------------------------------------------------
+
+    def refresh(self):
+        s = {"updated": time.time(), "mac": MAC,
+             "present": bool(self.hp) or self.present(),
+             "session": bool(self.hp), "error": self.error}
+        if not self.hp:
+            s["battery"] = self.bluez_battery()
+            s["battery_source"] = "bluez"
+            return s
+        try:
+            batteries = self.hp.get_batteries()
+            nc = self.hp.get_noise_control()
+        except mdr.MDRError as e:
+            self.drop(str(e))
+            return self.refresh()
+
+        s["batteries"] = [{"part": mdr.BATTERY_PART.get(b.part, b.part),
+                           "level": b.level_percent,
+                           "charging": mdr.CHARGING.get(b.charging, b.charging)}
+                          for b in batteries]
+        main = next((b for b in s["batteries"] if b["part"] == "main"), None) or \
+            (s["batteries"][0] if s["batteries"] else None)
+        s["battery"] = main["level"] if main else self.bluez_battery()
+        s["charging"] = main["charging"] if main else None
+        s["battery_source"] = "mdr" if main else "bluez"
+
+        raw = mdr.NOISE_MODE.get(nc.mode, nc.mode)
+        if self.claim is not None and raw != self.claim_baseline:
+            self.claim = None          # the device finally moved: believe it again
+        s["mode"] = self.claim if self.claim is not None else raw
+        s["mode_confirmed"] = self.claim is None
+        s["mode_reported"] = raw
+        s["ambient_level"] = nc.ambient_level
+        s["ambient_level_max"] = mdr.AMBIENT_LEVEL_MAX
+        s["focus_on_voice"] = bool(nc.focus_on_voice)
+        s["button_mode"] = mdr.NOISE_BUTTON.get(nc.button_mode, nc.button_mode)
+        s["adaptive"] = bool(nc.adaptive_ambient)
+        return s
+
+    def publish(self, s):
+        if s == self.state:
+            return
+        self.state = s
+        tmp = STATE + ".new"
+        with open(tmp, "w") as f:
+            json.dump(s, f)
+        os.replace(tmp, STATE)   # atomic: readers never see half a file
+
+    # -- commands --------------------------------------------------------
+
+    def set_mode(self, mode, level=None):
+        if self.hp is None:
+            return {"ok": False, "error": self.error or "no session"}
+        if mode not in mdr.NOISE_MODE_BY_NAME:
+            return {"ok": False, "error": f"unknown mode {mode!r}"}
+        try:
+            nc = self.hp.get_noise_control()
+            baseline = mdr.NOISE_MODE.get(nc.mode, nc.mode)
+            nc.mode = mdr.NOISE_MODE_BY_NAME[mode]
+            if level is not None:
+                nc.ambient_level = max(0, min(mdr.AMBIENT_LEVEL_MAX, int(level)))
+            self.hp.set_noise_control(nc)
+        except mdr.MDRError as e:
+            self.drop(str(e))
+            return {"ok": False, "error": str(e)}
+        # Do not wait for a read-back. The write lands; the echo may never come.
+        self.claim, self.claim_baseline = mode, baseline
+        return {"ok": True, "mode": mode, "confirmed": False}
+
+    def handle(self, line):
+        parts = line.split()
+        if not parts:
+            return {"ok": False, "error": "empty command"}
+        cmd, args = parts[0], parts[1:]
+        if cmd == "status":
+            return {"ok": True, "state": self.state}
+        if cmd == "mode":
+            if not args:
+                return {"ok": False, "error": "mode needs a value"}
+            return self.set_mode(args[0], args[1] if len(args) > 1 else None)
+        if cmd == "cycle":
+            now = self.state.get("mode")
+            nxt = CYCLE[(CYCLE.index(now) + 1) % len(CYCLE)] if now in CYCLE else CYCLE[0]
+            return self.set_mode(nxt)
+        if cmd == "ambient":
+            if not args:
+                return {"ok": False, "error": "ambient needs a level"}
+            return self.set_mode("ambient", args[0])
+        if cmd == "reconnect":
+            self.drop("reconnect requested")
+            self.next_attempt = 0.0
+            return {"ok": True}
+        if cmd == "ping":
+            return {"ok": True}
+        return {"ok": False, "error": f"unknown command {cmd!r}"}
+
+    # -- loop ------------------------------------------------------------
+
+    def run(self):
+        os.makedirs(RUNDIR, exist_ok=True)
+        if os.path.exists(SOCKET):
+            os.unlink(SOCKET)
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(SOCKET)
+        srv.listen(8)
+        srv.setblocking(False)
+
+        stop = []
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, lambda *_: stop.append(True))
+
+        last_publish = 0.0
+        while not stop:
+            if self.hp is None:
+                self.connect()
+
+            if self.hp:
+                try:
+                    self.hp.pump(50)
+                except Exception as e:
+                    self.drop(str(e))
+            else:
+                time.sleep(0.25)
+
+            try:
+                conn, _ = srv.accept()
+            except OSError as e:
+                if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                    raise
+            else:
+                self.serve(conn)
+
+            now = time.monotonic()
+            if now - last_publish >= 0.5:
+                last_publish = now
+                self.publish(self.refresh())
+
+        srv.close()
+        for p in (SOCKET,):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        if self.hp:
+            self.hp.close()
+
+    def serve(self, conn):
+        with conn:
+            conn.settimeout(2.0)
+            try:
+                line = conn.recv(4096).decode().strip()
+                reply = self.handle(line)
+                if reply.get("ok") and line.split()[:1] != ["status"]:
+                    reply["state"] = self.refresh()
+                conn.sendall((json.dumps(reply) + "\n").encode())
+            except (OSError, UnicodeDecodeError):
+                pass
+
+
+if __name__ == "__main__":
+    Daemon().run()

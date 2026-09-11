@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Talk to mdrctld. Everything here is cheap: no Bluetooth, just a socket.
+
+    mdrctl status            what the headphones are doing
+    mdrctl status --json     the same, for a bar widget
+    mdrctl watch             follow changes live
+    mdrctl mode ambient      set a mode (off | cancelling | ambient)
+    mdrctl ambient 15        ambient, at a level from 0 to 20
+    mdrctl cycle             next mode -- what a bar click should run
+    mdrctl reconnect         drop the session and take it again
+"""
+import json, os, socket, sys, time
+
+RUNDIR = os.path.join(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"), "mdrctl")
+SOCKET = os.path.join(RUNDIR, "sock")
+STATE = os.path.join(RUNDIR, "state.json")
+
+ICON = {"cancelling": "\N{NO ENTRY SIGN}", "ambient": "\N{EAR}", "off": "\N{SPEAKER}"}
+
+
+def ask(command, timeout=6.0):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(SOCKET)
+    except OSError:
+        return None
+    with s:
+        s.sendall((command + "\n").encode())
+        buf = b""
+        while not buf.endswith(b"\n"):
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+    try:
+        return json.loads(buf.decode())
+    except ValueError:
+        return None
+
+
+def read_state():
+    """Prefer the file: a bar polls this many times a minute and it costs a
+    read. The socket is for commands and for knowing the daemon is alive."""
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def render(s):
+    if s is None:
+        return "mdrctld not running"
+    if not s.get("present"):
+        return "headphones off"
+    bits = []
+    mode = s.get("mode")
+    if mode:
+        mark = "" if s.get("mode_confirmed", True) else "?"
+        bits.append(f"{ICON.get(mode, '')} {mode}{mark}".strip())
+        if mode == "ambient":
+            bits[-1] += f" {s.get('ambient_level')}/{s.get('ambient_level_max')}"
+    level = s.get("battery")
+    if level is not None:
+        charging = s.get("charging")
+        bits.append(f"{level}%" + (" charging" if charging == "yes" else ""))
+    if not s.get("session"):
+        bits.append("(no control session)")
+    return "  ".join(bits) if bits else "connected"
+
+
+def detail(s):
+    if s is None:
+        print("mdrctld is not running.  systemctl --user start mdrctld")
+        return 1
+    print(render(s))
+    if s.get("session"):
+        for b in s.get("batteries", []):
+            print(f"  {b['part']}: {b['level']}% (charging: {b['charging']})")
+        print(f"  button: {s.get('button_mode')}")
+        if s.get("adaptive"):
+            print("  adaptive ambient: on")
+        if s.get("mode") == "ambient":
+            print(f"  focus on voice: {'yes' if s.get('focus_on_voice') else 'no'}")
+        if not s.get("mode_confirmed", True):
+            print("  mode is what we asked for; the device has not echoed it back yet")
+    if s.get("error"):
+        print(f"  error: {s['error']}")
+    return 0
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return 0
+    cmd, args = argv[0], argv[1:]
+
+    if cmd == "status":
+        s = read_state()
+        if "--json" in args:
+            print(json.dumps(s or {"present": False, "session": False}))
+            return 0
+        if "--short" in args:
+            print(render(s))
+            return 0
+        return detail(s)
+
+    if cmd == "watch":
+        last = None
+        while True:
+            s = read_state()
+            line = render(s)
+            if line != last:
+                print(f"{time.strftime('%H:%M:%S')}  {line}", flush=True)
+                last = line
+            time.sleep(0.5)
+
+    reply = ask(" ".join([cmd] + args))
+    if reply is None:
+        print("mdrctld is not running.  systemctl --user start mdrctld", file=sys.stderr)
+        return 1
+    if not reply.get("ok"):
+        print(reply.get("error", "failed"), file=sys.stderr)
+        return 1
+    print(render(reply.get("state")))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        sys.exit(130)

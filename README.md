@@ -25,8 +25,43 @@ files. The GUI is not built.
 
 ## Use
 
+    install -Dm644 systemd-user/mdrctld.service ~/.config/systemd/user/
+    systemctl --user daemon-reload
+    systemctl --user start mdrctld       # add `enable` to have it at login
+
+    bin/mdrctl status                    # what the headphones are doing
+    bin/mdrctl watch                     # follow changes live
+    bin/mdrctl mode ambient              # off | cancelling | ambient
+    bin/mdrctl ambient 15                # ambient, level 0-20
+    bin/mdrctl cycle                     # next mode; what a bar click runs
+
+**Stop the daemon before using Sony's app**, on the phone or anywhere else. The
+device allows one control session at a time and the daemon holds it:
+
+    systemctl --user stop mdrctld
+
+The probing tools remain, for looking at a device this does not yet understand:
+
     ./tools/probe.py          # connect, print state, disconnect
     ./tools/uuid_scan.py MAC  # find the service UUID of another Sony device
+    ./tools/dump.py           # raw bytes from every endpoint
+
+## Shape
+
+    mdrctld  ── holds the one control session, publishes state, takes commands
+       |          $XDG_RUNTIME_DIR/mdrctl/{state.json,sock}
+       +── mdrctl              a socket away: status, watch, mode, cycle
+       +── bar/omarchy-headphones   reads state.json only, prints Waybar JSON
+
+The split exists because connecting is expensive and exclusive. A handshake
+costs several seconds and locks everyone else out, so a bar widget cannot open
+its own session: it would spend its life handshaking and would keep the phone
+app out while doing it. The daemon pays that cost once. Everything above it
+reads a file.
+
+That also means the widget keeps working when the daemon is stopped -- BlueZ
+publishes the battery over `org.bluez.Battery1` from the HFP indicator, with no
+session needed, and the two agree. Only the noise mode needs the session.
 
 ## Facts worth keeping
 
@@ -41,6 +76,9 @@ files. The GUI is not built.
   the protocol handshake.
 
 ## Status
+
+Working: the daemon, the CLI, and the bar widget. The widget shows battery and
+noise mode and cycles the mode on click.
 
 Reading works. `./tools/probe.py` reports the real battery level, and
 `./tools/dump.py` returns data from every endpoint the device supports.
@@ -59,7 +97,7 @@ truthy reports every idle headphone as charging.
 | Endpoint | State |
 |---|---|
 | Batteries | works — main, level, charging |
-| NoiseControl | read fully decoded; writes only half-proven (see below) |
+| NoiseControl | read and write both work; the echo does not (see below) |
 | Equalizer, EqualizerBands | works — 5 bands |
 | Playback, Power, Listening, SpeakToChat | return data |
 | VoiceGuidance, ConnectionMode | single byte each |
@@ -103,9 +141,20 @@ Consequences for anything built on top:
 Recovery if a device is left in the wrong mode: the button on the headphones
 cycles modes, per `button_mode`.
 
+How the daemon lives with it: after a write it keeps showing the mode it asked
+for, and goes back to believing the device only once the device's own reading
+*moves*. A value that moves is the only evidence it has something new to say;
+a value that sits still is exactly what a stale cache looks like. Press the
+button and the widget follows within seconds. Until then the mode is shown with
+a `?` -- almost certainly in effect, just not acknowledged.
+
 Still unexplained: why self-initiated changes are not echoed while button
 presses are. `mdrHeadphonesSetPacketCallback` exists for watching the wire and
-would answer it.
+would answer it. Worth doing for curiosity; nothing is waiting on it.
 
-Then a daemon holding the link plus a thin CLI (`mdrctl watch`), then the bar
-widget.
+## Next
+
+- the click cycle needs one real test with the headphones on a head
+- `bin/mdrctl ambient N` is written but unverified
+- equalizer is readable and untouched; a scroll-to-adjust ambient level would
+  need to know whether the bar's command widget has an `onScroll`
