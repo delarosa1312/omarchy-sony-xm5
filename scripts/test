@@ -23,10 +23,16 @@ fi
 
 echo
 echo "== plugin manifest and QML =="
-omarchy plugin validate "$ROOT/shell-plugin" && echo "manifest ok" || status=1
+# Validate what a clone would actually contain, not the working directory: the
+# local build tree under vendor/ is full of symlinks, which a plugin folder may
+# not have -- and it is not in git, so nobody else ever sees it.
+export_dir=$(mktemp -d)
+git -C "$ROOT" ls-files -z | tar --null -T - -cf - -C "$ROOT" 2>/dev/null | tar -xf - -C "$export_dir"
+omarchy plugin validate "$export_dir" && echo "manifest ok" || status=1
+rm -rf "$export_dir"
 # Any file with an IpcHandler makes qmllint exit 255, Omarchy's own included,
 # so only the panel is linted -- the one where a mistake would be ours.
-qmllint -I "${OMARCHY_PATH:-/usr/share/omarchy}/shell" "$ROOT/shell-plugin/Panel.qml" \
+qmllint -I "${OMARCHY_PATH:-/usr/share/omarchy}/shell" "$ROOT/Panel.qml" \
   && echo "Panel.qml lints clean" || status=1
 
 exit $status

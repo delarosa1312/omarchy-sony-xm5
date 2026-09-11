@@ -11,7 +11,11 @@ Stop it (`systemctl --user stop mdrctld`) before using Sony's app.
 """
 import json, os, select, socket, sys, time, subprocess, signal, errno
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+# A checkout keeps the module in ../lib; the package puts it beside the
+# shared objects it loads. Both are offered, and the import takes whichever
+# is really there.
+_here = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [os.path.join(_here, "..", "lib"), "/usr/lib/mdrctl"]
 import mdr
 
 # Which headphones. Normally none: the daemon takes whichever Sony device is

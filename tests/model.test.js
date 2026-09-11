@@ -11,7 +11,7 @@ const fs = require("fs")
 const path = require("path")
 const vm = require("vm")
 
-const source = fs.readFileSync(path.join(__dirname, "..", "shell-plugin", "Model.js"), "utf8")
+const source = fs.readFileSync(path.join(__dirname, "..", "Model.js"), "utf8")
 const Model = vm.createContext({})
 vm.runInContext(source, Model)
 

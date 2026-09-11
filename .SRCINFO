@@ -1,0 +1,25 @@
+pkgbase = mdrctl
+	pkgdesc = Control Sony MDR headphones (WH-1000XM5, WF-1000XM5) from Linux, with an Omarchy bar widget
+	pkgver = 1.0.0
+	pkgrel = 1
+	url = https://github.com/delarosa1312/mdrctl
+	install = mdrctl.install
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	makedepends = cmake
+	makedepends = ninja
+	makedepends = git
+	makedepends = gcc
+	depends = python
+	depends = bluez
+	depends = bluez-utils
+	depends = dbus
+	optdepends = omarchy: the bar widget this daemon drives
+	options = !debug
+	source = mdrctl::git+https://github.com/delarosa1312/mdrctl.git#tag=v1.0.0
+	source = git+https://github.com/mos9527/SonyHeadphonesClient.git#commit=965c458116d40827494726447de5f07eb50efcb8
+	sha256sums = SKIP
+	sha256sums = SKIP
+
+pkgname = mdrctl

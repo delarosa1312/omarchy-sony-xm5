@@ -1,0 +1,23 @@
+post_install() {
+  cat <<'MSG'
+mdrctl installed. Start it for your user:
+
+    systemctl --user enable --now mdrctld mpris-proxy
+
+mpris-proxy is what carries pause-on-removal and the headset's transport
+buttons to your player; without it they reach nothing at all.
+
+The Omarchy bar widget is the same repository:
+
+    omarchy plugin add https://github.com/delarosa1312/mdrctl.git --enable
+MSG
+}
+
+post_upgrade() {
+  systemctl --user daemon-reload 2>/dev/null || true
+  echo "restart the daemon to pick this up:  systemctl --user restart mdrctld"
+}
+
+pre_remove() {
+  systemctl --user disable --now mdrctld mpris-proxy 2>/dev/null || true
+}

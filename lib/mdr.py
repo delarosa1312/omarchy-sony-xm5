@@ -220,10 +220,37 @@ class MDRError(RuntimeError):
 class Library:
     """Loads the two shared objects and declares the calls we use."""
 
-    def __init__(self, build_dir):
+    # Where the two shared objects sit, in build order: a tree built in place
+    # by scripts/build-libmdr.sh, or a package that installed them flat.
+    LAYOUTS = (("libmdr/src/libmdr-shared.so", "libmdr-bt/src/libmdr-bt-shared.so"),
+               ("libmdr-shared.so", "libmdr-bt-shared.so"))
+    PACKAGED = "/usr/lib/mdrctl"
+
+    @classmethod
+    def find(cls, build_dir=None):
+        """The first directory that actually holds the libraries.
+
+        A checkout runs from its own build tree; an installed package has them
+        flat in one directory. Trying both means the daemon does not care which
+        way it was put there.
+        """
+        import os
+        roots = [build_dir] if build_dir else []
+        roots += [os.environ.get("MDR_BUILD"), cls.PACKAGED]
+        for root in [r for r in roots if r]:
+            for mdr_so, bt_so in cls.LAYOUTS:
+                if os.path.exists(os.path.join(root, mdr_so)):
+                    return root, mdr_so, bt_so
+        raise MDRError(
+            "libmdr not found. Build it with scripts/build-libmdr.sh, install "
+            "the package, or point MDR_BUILD at a build directory")
+
+    def __init__(self, build_dir=None):
+        import os
+        root, mdr_so, bt_so = self.find(build_dir)
         p = C.c_void_p
-        self.mdr = C.CDLL(f"{build_dir}/libmdr/src/libmdr-shared.so", mode=C.RTLD_GLOBAL)
-        self.bt = C.CDLL(f"{build_dir}/libmdr-bt/src/libmdr-bt-shared.so", mode=C.RTLD_GLOBAL)
+        self.mdr = C.CDLL(os.path.join(root, mdr_so), mode=C.RTLD_GLOBAL)
+        self.bt = C.CDLL(os.path.join(root, bt_so), mode=C.RTLD_GLOBAL)
 
         def sig(lib, name, restype, *argtypes):
             fn = getattr(lib, name)

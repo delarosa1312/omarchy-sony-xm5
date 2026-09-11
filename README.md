@@ -1,13 +1,124 @@
-# mdrctl
+# Sony XM5 — headphone controls for the Omarchy bar
 
-Control Sony MDR headphones from Linux, with the aim of driving them from a
-small Omarchy bar widget rather than Sony's app.
+![The panel](preview.png)
 
-Written against a **WH-1000XM5** and a **WF-1000XM5**, which are the only two
-devices any of this has been run on. Devices are found by the MDR service they
-advertise rather than by a list of addresses, and every control is gated on
-what the device says it supports, so another Sony model has a fair chance of
-working -- but nobody has tried one, and the notes below describe those two.
+A bar widget for the **Sony WH-1000XM5** headphones and **WF-1000XM5**
+earbuds. Battery in the bar, and a panel for noise control, the equaliser,
+DSEE, auto pause and the headset's other connections.
+
+Those two are the only devices this has been run against, and they are what
+it claims to support. Other Sony models that speak MDR may well work — the
+device is found by the service it offers rather than by a list of addresses,
+and every control is gated on what that device says it has, so a model without
+DSEE simply shows no DSEE. But "may well work" is not "tested", and only those
+two have been.
+
+Between those two there is nothing to configure. The daemon takes whichever
+one is connected, so swapping headphones for earbuds needs nothing from you:
+the panel retitles itself and shows the controls that pair actually has.
+
+## What it shows
+
+- **Battery** — per part, so earbuds report both buds and the case. The bar
+  carries the emptier of the two you are wearing, which is the one that ends
+  the listening.
+- **Noise control** — cancelling, ambient, off, with the ambient level when it
+  applies.
+- **Sound** — the five-band equaliser with clear bass and an undo, and DSEE.
+- **Power** — auto pause when you take them off.
+- **Devices** — who else the headset is connected to, with disconnect and
+  unpair.
+
+Controls appear only for what the device advertises. A write to an endpoint a
+device does not support is accepted, committed locally and never sent, so a
+control that is always drawn would look like it worked and silently do nothing.
+
+Three settings are shown but not offered — connection quality, the auto
+power-off timer and the equaliser presets. Both XM5 models acknowledge those
+commands and then keep the old value, which was established by writing them
+and reconnecting to see what actually stuck. They carry a lock and say so on
+hover, rather than pretending to be controls.
+
+## Install
+
+Two pieces. The bar widget cannot talk Bluetooth by itself: `mdrctld` owns the
+headset's control session, because the device allows exactly one and the
+handshake costs seconds.
+
+**The daemon**, as an Arch package:
+
+    git clone https://github.com/delarosa1312/mdrctl.git
+    cd mdrctl
+    makepkg --cleanbuild --install
+
+That builds `libmdr` from [SonyHeadphonesClient][upstream], installs `mdrctl`
+and `mdrctld`, and enables the user services. Remove it with
+`sudo pacman -Rns mdrctl`.
+
+Not on Arch, or want it out of a checkout instead:
+
+    ./scripts/install.sh
+
+**The widget**:
+
+    omarchy plugin add https://github.com/delarosa1312/mdrctl.git --enable
+
+Same repository: `manifest.json` sits at its root, so the same clone serves
+both. Installing the widget alone is not fatal and not silent -- it appears in
+the bar with no readings and says what is missing when you click it.
+
+[upstream]: https://github.com/mos9527/SonyHeadphonesClient
+
+## What it needs
+
+- `bluez`, and `bluez-utils` for `mpris-proxy` -- without it, pause-on-removal
+  and the headset's transport buttons reach nothing at all
+- `python` (no third-party modules)
+- to build: `cmake`, `ninja`, a C++20 compiler, `git`, and the BlueZ and D-Bus
+  development files
+
+It runs nothing as root, opens no Bluetooth session from the panel, and starts
+no second Quickshell process. The daemon talks to the panel over a unix socket
+in `$XDG_RUNTIME_DIR`.
+
+
+## Place it on the bar
+
+    omarchy bar move io.github.delarosa1312.sony-xm5 --section right
+    omarchy bar move io.github.delarosa1312.sony-xm5 --before omarchy.bluetooth
+
+## Use
+
+Click the chip to open the panel; right-click cycles the noise mode without
+opening anything. Scrolling the chip changes the ambient level, but only in
+ambient mode, where the number means something.
+
+In the panel: `n` `a` `o` pick a noise mode, `c` cycles, `d` toggles DSEE,
+`p` auto pause, `m` multipoint, `e` opens the equaliser and `z` undoes it back
+to what it was when the panel opened. Escape closes.
+
+The equaliser is collapsed by default and its sliders ignore the scroll wheel,
+because scrolling a panel past a slider used to commit every slider it passed.
+
+## Optional: battery while the daemon is stopped
+
+With `mdrctld` running, this configures itself. Without it, BlueZ still knows
+the battery level — but not which of your devices to ask about, so give it the
+address if you want a reading in that case:
+
+    omarchy bar set io.github.delarosa1312.sony-xm5 mac AA:BB:CC:DD:EE:FF
+
+`bluetoothctl devices Connected` will tell you the address. Nothing else needs
+it, and the panel ignores it entirely while the daemon is up.
+
+## Develop
+
+    ./scripts/test        # daemon, panel logic, manifest, qmllint -- no headphones
+    ./scripts/sync.sh     # the repo -> the installed plugin, and reload the shell
+
+`qmllint` exits non-zero on any file containing an `IpcHandler`, Omarchy's own
+`clock/BarWidget.qml` included, so only `Panel.qml` is linted.
+
 
 ## Why this shape
 
@@ -22,50 +133,13 @@ it from Python with ctypes:
 
 Upstream is pinned to a commit in `scripts/build-libmdr.sh`.
 
-## Setup
-
-    ./scripts/install.sh
-
-Builds `libmdr` and installs the two user services. Needs `cmake`, `ninja`, a
-C++20 compiler, the BlueZ and D-Bus development files, and `bluez-utils` for
-`mpris-proxy`. The upstream GUI is not built.
-
-The unit carries `@MDRCTLD@` rather than a path, and the installer fills in
-wherever you cloned this: a path baked into a repository is right for exactly
-one machine.
-
-## Use
-
-    bin/mdrctl status                    # what the headphones are doing
-    bin/mdrctl watch                     # follow changes live
-    bin/mdrctl mode ambient              # off | cancelling | ambient
-    bin/mdrctl ambient 15                # ambient, level 0-20
-    bin/mdrctl cycle                     # next mode; what a bar click runs
-
-There is no address to configure. The daemon takes whichever connected device
-offers the MDR service, so a second Sony pair works the first time it is put
-on. Set `MDR_MAC` only to pin it to one, which matters solely when two are
-connected at once.
-
-    ./scripts/test                       # no headphones required
-
-**Stop the daemon before using Sony's app**, on the phone or anywhere else. The
-device allows one control session at a time and the daemon holds it:
-
-    systemctl --user stop mdrctld
-
-The probing tools remain, for looking at a device this does not yet understand:
-
-    ./tools/probe.py          # connect, print state, disconnect
-    ./tools/uuid_scan.py MAC  # find the service UUID of another Sony device
-    ./tools/dump.py           # raw bytes from every endpoint
-
 ## Shape
 
     mdrctld  ── holds the one control session, publishes state, takes commands
        |          $XDG_RUNTIME_DIR/mdrctl/{state.json,sock}
        +── mdrctl               a socket away: status, watch, mode, cycle
-       +── shell-plugin/        the Omarchy bar widget and its popup
+       +── manifest.json + *.qml  the Omarchy bar widget, at the repository
+                                 root so one clone serves both halves
        +── bar/omarchy-sony-xm5   a plain Waybar-JSON script, kept as a
                                     fallback for bars without a plugin system
 
@@ -86,29 +160,6 @@ That also means the widget keeps working when the daemon is stopped -- BlueZ
 publishes the battery over `org.bluez.Battery1` from the HFP indicator, with no
 session needed, and the two agree. Only the noise mode needs the session.
 
-## The bar widget
-
-`shell-plugin/` is an Omarchy shell plugin: a chip on the bar and a popup with
-the noise modes as a button group, an ambient-level slider, and the details.
-It is a proper plugin rather than a `command` entry in `shell.json` because a
-command widget can only print a line and run a command on click -- it cannot
-open anything.
-
-    ./scripts/sync-plugin.sh push      # repo -> ~/.config/omarchy/plugins/
-    omarchy plugin enable io.github.delarosa1312.sony-xm5
-
-The shell hot-reloads plugin *files*, but the QML engine goes on serving the
-component it already compiled, so a change needs `omarchy restart shell`. The
-push script does that for you.
-
-Edit the copy under `~/.config/omarchy/plugins/io.github.delarosa1312.sony-xm5/` and run
-`./scripts/sync-plugin.sh` to bring it back here.
-
-The panel takes battery and connected state from BlueZ through
-`Quickshell.Bluetooth`, so the widget still works with the daemon stopped --
-it dims the mode buttons and offers to start it. Noise control is the only
-part that needs the session.
-
 ## Facts worth keeping
 
 - **The WH-1000XM5 answers on `956C7B26-D49A-4BA8-B03F-B17D393CB6E2`.** The
@@ -121,21 +172,6 @@ part that needs the session.
 - Connecting is asynchronous: poll until it stops reporting progress, then do
   the protocol handshake.
 
-## The widget
-
-The Omarchy bar widget lives in `shell-plugin/` and is published separately, at
-[omarchy-sony-xm5](https://github.com/delarosa1312/omarchy-sony-xm5) -- the
-marketplace clones a repository and reads `manifest.json` at its root, so it
-cannot sit in a subdirectory of this one.
-
-    ./scripts/sync-plugin.sh push    # repo -> the live plugin, and reload
-    ./scripts/sync-plugin.sh pull    # the live plugin -> repo
-    ./scripts/publish-plugin.sh      # test, then push it to its own repo
-
-`publish-plugin.sh` rebuilds that repository's history from the plugin's
-commits here, so there is one place to edit and no second copy to keep level
-by hand.
-
 ## Tests
 
     ./scripts/test
@@ -146,7 +182,7 @@ MDR device and nothing else, a claimed value surviving the device's own late
 echo of it, and which battery stands for a pair of earbuds.
 
 `tests/model.test.js` covers the panel's own logic, which lives in
-`shell-plugin/Model.js` for exactly that reason -- extracting it immediately
+`Model.js` for exactly that reason -- extracting it immediately
 turned up a bug where the earbud readings were printed in whatever order the
 device answered in.
 
