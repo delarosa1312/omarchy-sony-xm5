@@ -222,6 +222,16 @@ Do not take a read-back from the writing session as evidence: the library
 commits the value to its own copy whether or not the device honoured it. The
 auto-power-off timer looked like it worked for exactly that reason.
 
+### A session object is not a link
+
+The library answers every read from its own cache, with no error, long after
+the headphones have been switched off. So `mdrctld` went on publishing a live
+headset -- full battery, mode, equaliser -- with nothing on the other end, and
+the widget went on offering controls for it. Nothing in the MDR API reports
+this; BlueZ is the one that knows. The daemon now asks it every few seconds
+while it believes it has a session, and drops the session when the device goes
+away.
+
 ### One control channel across every paired device
 
 The headset grants one MDR session, and that is shared with whatever else it is

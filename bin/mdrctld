@@ -71,6 +71,7 @@ class Daemon:
         self.backoff = 2.0
         self.error = None
         self._last_write = 0.0
+        self._last_liveness = 0.0
         self._features = {}
         # Connections that asked to be told about changes instead of polling.
         self.subscribers = []
@@ -198,7 +199,19 @@ class Daemon:
 
     # -- state -----------------------------------------------------------
 
+    LIVENESS_EVERY = 3.0
+
     def refresh(self):
+        # Having a session object is not the same as having a link. The library
+        # answers every read from its own cache, with no error, long after the
+        # headphones have been switched off -- so the widget went on showing a
+        # live headset and offering controls for it. BlueZ is the one that
+        # actually knows, so ask it on a slow cadence.
+        if self.hp and time.monotonic() - self._last_liveness > self.LIVENESS_EVERY:
+            self._last_liveness = time.monotonic()
+            if not self.present():
+                self.drop("headphones disconnected")
+
         s = {"updated": time.time(), "mac": MAC,
              "present": bool(self.hp) or self.present(),
              "session": bool(self.hp), "error": self.error}
