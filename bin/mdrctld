@@ -127,7 +127,7 @@ class Daemon:
             hp.open()
             hp.watch_packets(self.on_packet)
         except mdr.MDRError as e:
-            self.error = str(e)
+            self.error = self.explain(str(e))
             self.next_attempt = time.monotonic() + self.backoff
             self.backoff = min(self.backoff * 2, 60.0)
             return
@@ -165,6 +165,25 @@ class Daemon:
         if self._last_tx is not None and self._last_tx[2:] == body[:len(self._last_tx) - 2]:
             self.retransmits += 1
         self._last_tx = frame
+
+    @staticmethod
+    def explain(error):
+        """Turn the transport's wording into the thing that is actually wrong.
+
+        The headset allows one control session across every device it is paired
+        with, so with multipoint on, a phone holding that session leaves this
+        one nothing to connect to. The RFCOMM layer reports that as EBUSY,
+        which tells the user nothing at all.
+        """
+        # Both wordings mean the same thing in practice: the headset would not
+        # give us its control channel. It allows one across every device it is
+        # paired with, so a phone it is also connected to can be holding it --
+        # Sony's app does not have to be open for that.
+        low = error.lower()
+        if "busy" in low or "timed out" in low or "timeout" in low:
+            return ("the headset would not hand over its control channel -- it "
+                    "allows one at a time, and another paired device may have it")
+        return error
 
     def drop(self, why):
         if self.hp:

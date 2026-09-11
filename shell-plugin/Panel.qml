@@ -735,14 +735,30 @@ Panel {
             fontFamily: root.fontFamily
           }
 
-          Dropdown {
+          // Shown, not offered: the write is acknowledged and discarded, like
+          // the equaliser presets and connection priority. Verified twice by
+          // reconnecting -- what looked like it working was our own optimism
+          // being read back.
+          Item {
             width: parent.width
-            label: "Switch off"
-            options: root.powerOffChoices
-            value: root.powerOffLabel(root.powerOff)
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            onChanged: function(v) { root.setPowerOff(v) }
+            implicitHeight: powerOffLabelText.implicitHeight
+
+            Text {
+              id: powerOffLabelText
+              anchors.left: parent.left
+              text: "Switch off"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+
+            Text {
+              anchors.right: parent.right
+              text: root.powerOffLabel(root.powerOff)
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
           }
 
           Toggle {

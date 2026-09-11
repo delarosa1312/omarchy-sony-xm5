@@ -139,7 +139,7 @@ truthy reports every idle headphone as charging.
 | EqualizerBands + clear bass | 5 bands, -10..+10 | **works** (verified by reconnect) |
 | Equalizer preset | works | **accepted and ignored** |
 | ConnectionMode | quality / stability | **acknowledged and ignored** |
-| Power | auto power off, wearing, auto pause | **works** (auto power off verified) |
+| Power | auto power off, wearing, auto pause | auto pause **works**; auto power off **acknowledged and ignored**; shutdown **works** |
 | Listening | returns data | feature probe says *unavailable* on the XM5 |
 | PairedDevices | 6 devices with MAC and name | not wired up |
 | SpeakToChat, VoiceGuidance | return data | not wired up |
@@ -212,10 +212,28 @@ Preset is a separate message and is sent unconditionally, yet the device
 ignores it: tested with two different presets, each checked from a fresh
 session. So the widget shows the preset and does not offer to change it.
 
-**Connection priority behaves the same way.** The frame goes out, the device
-acknowledges it 25 ms later, and a fresh session still reads the old value.
-Two controls now known to be accepted and discarded, both shown read-only.
-An ACK really does mean only that the command arrived.
+**Connection priority and the auto-power-off timer behave the same way.** The
+frame goes out, the device acknowledges it within 25 ms, and a fresh session
+still reads the old value. Three controls now known to be accepted and
+discarded -- presets, connection priority, auto power off -- all shown
+read-only. An ACK really does mean only that the command arrived.
+
+Do not take a read-back from the writing session as evidence: the library
+commits the value to its own copy whether or not the device honoured it. The
+auto-power-off timer looked like it worked for exactly that reason.
+
+### One control channel across every paired device
+
+The headset grants one MDR session, and that is shared with whatever else it is
+connected to. With multipoint on and a phone attached, the connect can fail with
+either EBUSY or "Timed out Connecting to remote device" while A2DP audio keeps
+working perfectly. Sony's app does not need to be open for the phone to be
+holding it.
+
+A failed connect must tear its half-open connection down. Leaving it holds an
+RFCOMM socket, and the next attempt then fails against our own leftovers, so one
+failure becomes permanent failure. `/proc/net/rfcomm` should show no sockets for
+your user while the daemon has no session.
 
 ### Switching off needs a settle, uniquely
 

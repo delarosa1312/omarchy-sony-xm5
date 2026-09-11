@@ -260,6 +260,7 @@ class Headphones:
 
         r = lib.connect(self._conn, self.mac.encode(), self.uuid.encode())
         if r not in (RESULT_OK, RESULT_INPROGRESS):
+            self.close()
             raise MDRError(f"connect refused: {lib.result(r)}")
 
         # The connect is asynchronous: drive it until it stops reporting progress.
@@ -270,10 +271,17 @@ class Headphones:
                 break
         if state != RESULT_OK:
             err = lib.last_error(self._conn)
-            raise MDRError(f"link failed: {lib.result(state)} {err.decode() if err else ''}".strip())
+            message = f"link failed: {lib.result(state)} {err.decode() if err else ''}".strip()
+            # Tear the half-open connection down before giving up. Leaving it
+            # holds an RFCOMM socket open, and the next attempt then fails with
+            # EBUSY against our own leftovers -- one failure turning into
+            # permanent failure.
+            self.close()
+            raise MDRError(message)
 
         r = lib.hp_create(ABI_VERSION, self._conn, self.protocol, C.byref(self._hp))
         if r != RESULT_OK:
+            self.close()
             raise MDRError(f"could not create headphones object: {lib.result(r)}")
 
         lib.hp_init(self._hp)
@@ -283,7 +291,8 @@ class Headphones:
             if lib.hp_ready(self._hp):
                 break
         else:
-            raise MDRError("headphones never became ready (is the app or phone holding the link?)")
+            self.close()
+            raise MDRError("headphones never became ready (is another device holding the link?)")
 
         lib.hp_sync(self._hp)
         deadline = time.monotonic() + settle
