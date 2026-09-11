@@ -24,16 +24,17 @@ Upstream is pinned to a commit in `scripts/build-libmdr.sh`.
 
 ## Setup
 
-    ./scripts/build-libmdr.sh
+    ./scripts/install.sh
 
-Needs `cmake`, `ninja`, a C++20 compiler, and the BlueZ and D-Bus development
-files. The GUI is not built.
+Builds `libmdr` and installs the two user services. Needs `cmake`, `ninja`, a
+C++20 compiler, the BlueZ and D-Bus development files, and `bluez-utils` for
+`mpris-proxy`. The upstream GUI is not built.
+
+The unit carries `@MDRCTLD@` rather than a path, and the installer fills in
+wherever you cloned this: a path baked into a repository is right for exactly
+one machine.
 
 ## Use
-
-    install -Dm644 systemd-user/mdrctld.service ~/.config/systemd/user/
-    systemctl --user daemon-reload
-    systemctl --user start mdrctld       # add `enable` to have it at login
 
     bin/mdrctl status                    # what the headphones are doing
     bin/mdrctl watch                     # follow changes live
@@ -65,7 +66,7 @@ The probing tools remain, for looking at a device this does not yet understand:
        |          $XDG_RUNTIME_DIR/mdrctl/{state.json,sock}
        +── mdrctl               a socket away: status, watch, mode, cycle
        +── shell-plugin/        the Omarchy bar widget and its popup
-       +── bar/omarchy-headphones   a plain Waybar-JSON script, kept as a
+       +── bar/omarchy-sony-xm5   a plain Waybar-JSON script, kept as a
                                     fallback for bars without a plugin system
 
 The panel holds one socket to the daemon: commands go down it, and the daemon

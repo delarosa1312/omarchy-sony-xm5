@@ -10,8 +10,11 @@ PartOf=graphical-session.target
 StartLimitIntervalSec=0
 
 [Service]
+# @MDRCTLD@ is filled in by scripts/install.sh with wherever this was cloned.
+# It used to be one author's home directory, which worked for exactly one
+# person.
 Type=simple
-ExecStart=%h/Documents/Projects/Personal/Utils/mdrctl/bin/mdrctld
+ExecStart=@MDRCTLD@
 Restart=on-failure
 RestartSec=5
 
