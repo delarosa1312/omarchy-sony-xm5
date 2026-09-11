@@ -455,7 +455,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(360))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(620))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(780))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -901,22 +901,55 @@ Panel {
                 id: deviceRow
                 required property var modelData
                 readonly property bool busy: root.deviceBusy(modelData.mac)
+                readonly property bool isPlaying: modelData.playback === true
+                readonly property string label:
+                  modelData.name && modelData.name !== "" ? modelData.name : modelData.mac
                 width: parent.width
                 implicitHeight: Math.max(devName.implicitHeight, actions.implicitHeight)
 
+                // Three states in one glyph rather than a word that has to be
+                // truncated: hollow for not connected, filled for connected,
+                // ringed for the one actually carrying audio.
                 Text {
-                  id: devName
+                  id: statusDot
                   anchors.left: parent.left
                   anchors.verticalCenter: parent.verticalCenter
-                  width: parent.width - actions.width - Style.space(10)
-                  text: (deviceRow.modelData.connected ? "\u25cf  " : "\u25cb  ")
-                        + (deviceRow.modelData.name && deviceRow.modelData.name !== ""
-                           ? deviceRow.modelData.name : deviceRow.modelData.mac)
-                        + (deviceRow.modelData.playback ? "  \u00b7  playing" : "")
+                  width: Style.space(16)
+                  text: deviceRow.isPlaying ? "\u25c9" : (deviceRow.modelData.connected ? "\u25cf" : "\u25cb")
+                  color: deviceRow.modelData.connected ? root.foreground : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+
+                Text {
+                  id: devName
+                  anchors.left: statusDot.right
+                  anchors.right: actions.left
+                  anchors.rightMargin: Style.space(10)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: deviceRow.label
                   color: deviceRow.modelData.connected ? root.foreground : root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
                   elide: Text.ElideRight
+                }
+
+                MouseArea {
+                  id: rowHover
+                  anchors.left: parent.left
+                  anchors.right: actions.left
+                  anchors.top: parent.top
+                  anchors.bottom: parent.bottom
+                  hoverEnabled: true
+                  acceptedButtons: Qt.NoButton
+
+                  PanelToolTip {
+                    visible: rowHover.containsMouse
+                    text: deviceRow.isPlaying ? "Connected, and playing"
+                          : deviceRow.modelData.connected ? "Connected to the headphones"
+                          : "Not connected"
+                    fontFamily: root.fontFamily
+                  }
                 }
 
                 Row {
@@ -926,9 +959,9 @@ Panel {
                   spacing: Style.space(6)
 
                   Button {
-                    // While the action is in flight the label gives way to a
-                    // turning glyph, so a click that is doing something slow
-                    // cannot be mistaken for one that did nothing.
+                    // Fixed width, so Connect and Disconnect leave the remove
+                    // buttons in one column instead of a ragged edge.
+                    width: Style.space(116)
                     text: deviceRow.busy ? "" : (deviceRow.modelData.connected ? "Disconnect" : "Connect")
                     iconText: deviceRow.busy ? "󰑐" : "󰂯"
                     iconSpinning: deviceRow.busy
@@ -946,18 +979,19 @@ Panel {
                       deviceRow.modelData.mac)
                   }
 
+                  // Kept in the layout even when it cannot be used, so every
+                  // row is the same width and the column stays straight.
                   PanelActionButton {
-                    // Same glyph Omarchy's own Bluetooth panel uses to forget
-                    // a device, so it reads the way the rest of the shell does.
                     iconText: "󰅙"
-                    tooltipText: "Remove this pairing from the headphones"
-                    visible: !deviceRow.modelData.playback
-                    enabled: !deviceRow.busy
+                    tooltipText: deviceRow.isPlaying
+                      ? "The device playing cannot be removed from here"
+                      : "Remove this pairing from the headphones"
+                    opacity: deviceRow.isPlaying ? 0 : 1
+                    enabled: !deviceRow.isPlaying && !deviceRow.busy
                     foreground: root.foreground
                     hoverColor: root.urgent
                     fontFamily: root.fontFamily
-                    onClicked: root.askRemove(deviceRow.modelData.mac,
-                                              deviceRow.modelData.name || deviceRow.modelData.mac)
+                    onClicked: root.askRemove(deviceRow.modelData.mac, deviceRow.label)
                   }
                 }
               }
