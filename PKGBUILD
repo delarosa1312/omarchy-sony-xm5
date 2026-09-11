@@ -4,7 +4,7 @@ pkgver=1.0.0
 pkgrel=1
 pkgdesc="Control Sony MDR headphones (WH-1000XM5, WF-1000XM5) from Linux, with an Omarchy bar widget"
 arch=('x86_64' 'aarch64')
-url="https://github.com/delarosa1312/mdrctl"
+url="https://github.com/delarosa1312/omarchy-sony-xm5"
 license=('MIT')
 depends=('python' 'bluez' 'bluez-utils' 'dbus')
 makedepends=('cmake' 'ninja' 'git' 'gcc')
@@ -16,7 +16,7 @@ options=('!debug')
 # modified, so there is no fork to keep up with -- only a commit to pin.
 _mdrcommit=965c458116d40827494726447de5f07eb50efcb8
 source=(
-  "$pkgname::git+https://github.com/delarosa1312/mdrctl.git#tag=v$pkgver"
+  "$pkgname::git+https://github.com/delarosa1312/omarchy-sony-xm5.git#tag=v$pkgver"
   "git+https://github.com/mos9527/SonyHeadphonesClient.git#commit=$_mdrcommit"
 )
 sha256sums=('SKIP' 'SKIP')

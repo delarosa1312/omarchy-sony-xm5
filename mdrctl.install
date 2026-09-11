@@ -9,7 +9,7 @@ buttons to your player; without it they reach nothing at all.
 
 The Omarchy bar widget is the same repository:
 
-    omarchy plugin add https://github.com/delarosa1312/mdrctl.git --enable
+    omarchy plugin add https://github.com/delarosa1312/omarchy-sony-xm5.git --enable
 MSG
 }
 

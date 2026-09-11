@@ -47,8 +47,8 @@ handshake costs seconds.
 
 **The daemon**, as an Arch package:
 
-    git clone https://github.com/delarosa1312/mdrctl.git
-    cd mdrctl
+    git clone https://github.com/delarosa1312/omarchy-sony-xm5.git
+    cd omarchy-sony-xm5
     makepkg --cleanbuild --install
 
 That builds `libmdr` from [SonyHeadphonesClient][upstream], installs `mdrctl`
@@ -61,7 +61,7 @@ Not on Arch, or want it out of a checkout instead:
 
 **The widget**:
 
-    omarchy plugin add https://github.com/delarosa1312/mdrctl.git --enable
+    omarchy plugin add https://github.com/delarosa1312/omarchy-sony-xm5.git --enable
 
 Same repository: `manifest.json` sits at its root, so the same clone serves
 both. Installing the widget alone is not fatal and not silent -- it appears in

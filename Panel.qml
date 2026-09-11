@@ -1091,9 +1091,9 @@ Panel {
           Text {
             width: parent.width
             text: root.needsSetup
-              ? "This widget is a face for mdrctld, which is not answering. It is a "
-                + "separate install: github.com/delarosa1312/mdrctl — build it, run "
-                + "./scripts/install.sh, and this fills in by itself."
+              ? "This widget is a face for mdrctld, which is not answering. The "
+                + "daemon installs separately, from the same repository: "
+                + "github.com/delarosa1312/omarchy-sony-xm5"
               : root.errorText !== ""
                 ? root.errorText
                 : "No control session. BlueZ still reports the battery, but noise control needs mdrctld."
