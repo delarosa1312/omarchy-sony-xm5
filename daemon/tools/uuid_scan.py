@@ -17,7 +17,7 @@ CANDIDATES = [
 MAC = mdr.device_address(sys.argv[1] if len(sys.argv) > 1 else None)
 BUILD = os.environ.get(
     "MDR_BUILD",
-    os.path.join(os.path.dirname(__file__), "..", "vendor", "SonyHeadphonesClient", "build"),
+    os.path.join(os.path.dirname(__file__), "..", "..", "vendor", "SonyHeadphonesClient", "build"),
 )
 
 lib = mdr.Library(BUILD)

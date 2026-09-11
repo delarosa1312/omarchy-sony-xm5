@@ -13,9 +13,9 @@ if [ ! -f "$ROOT/vendor/SonyHeadphonesClient/build/libmdr/src/libmdr-shared.so" 
 fi
 
 mkdir -p "$UNITS"
-sed "s|@MDRCTLD@|$ROOT/bin/mdrctld|" "$ROOT/systemd-user/mdrctld.service" \
+sed "s|@MDRCTLD@|$ROOT/daemon/bin/mdrctld|" "$ROOT/daemon/systemd-user/mdrctld.service" \
   > "$UNITS/mdrctld.service"
-install -Dm644 "$ROOT/systemd-user/mpris-proxy.service" "$UNITS/mpris-proxy.service"
+install -Dm644 "$ROOT/daemon/systemd-user/mpris-proxy.service" "$UNITS/mpris-proxy.service"
 
 systemctl --user daemon-reload
 systemctl --user enable --now mdrctld.service
@@ -29,4 +29,4 @@ else
 fi
 
 echo
-echo "installed. check it with:  $ROOT/bin/mdrctl status"
+echo "installed. check it with:  $ROOT/daemon/bin/mdrctl status"

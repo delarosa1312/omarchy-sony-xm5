@@ -41,15 +41,15 @@ package() {
   install -Dm755 build/libmdr-bt/src/libmdr-bt-shared.so \
     "$pkgdir/usr/lib/mdrctl/libmdr-bt-shared.so"
 
-  install -Dm644 "$pkgname/lib/mdr.py" "$pkgdir/usr/lib/mdrctl/mdr.py"
-  install -Dm755 "$pkgname/bin/mdrctl" "$pkgdir/usr/bin/mdrctl"
-  install -Dm755 "$pkgname/bin/mdrctld" "$pkgdir/usr/bin/mdrctld"
+  install -Dm644 "$pkgname/daemon/lib/mdr.py" "$pkgdir/usr/lib/mdrctl/mdr.py"
+  install -Dm755 "$pkgname/daemon/bin/mdrctl" "$pkgdir/usr/bin/mdrctl"
+  install -Dm755 "$pkgname/daemon/bin/mdrctld" "$pkgdir/usr/bin/mdrctld"
 
-  install -Dm644 "$pkgname/systemd-user/mpris-proxy.service" \
+  install -Dm644 "$pkgname/daemon/systemd-user/mpris-proxy.service" \
     "$pkgdir/usr/lib/systemd/user/mpris-proxy.service"
   # The unit template carries @MDRCTLD@ so a checkout can fill in its own path.
   # Installed, the daemon is simply on PATH.
-  sed "s|@MDRCTLD@|/usr/bin/mdrctld|" "$pkgname/systemd-user/mdrctld.service" \
+  sed "s|@MDRCTLD@|/usr/bin/mdrctld|" "$pkgname/daemon/systemd-user/mdrctld.service" \
     > mdrctld.service.packaged
   install -Dm644 mdrctld.service.packaged \
     "$pkgdir/usr/lib/systemd/user/mdrctld.service"

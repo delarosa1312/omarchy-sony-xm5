@@ -28,7 +28,7 @@ MAC = os.environ.get("MDR_MAC", "")
 MDR_UUID = "956c7b26-d49a-4ba8-b03f-b17d393cb6e2"
 BUILD = os.environ.get(
     "MDR_BUILD",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "vendor",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "vendor",
                  "SonyHeadphonesClient", "build"),
 )
 RUNDIR = os.path.join(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"), "mdrctl")

@@ -19,15 +19,15 @@ import unittest
 from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "lib"))
+sys.path.insert(0, os.path.join(ROOT, "daemon", "lib"))
 import mdr  # noqa: E402
 
 
 def load_daemon():
-    """Import bin/mdrctld, which has no .py on the end of it."""
+    """Import daemon/bin/mdrctld, which has no .py on the end of it."""
     spec = importlib.util.spec_from_loader(
         "mdrctld",
-        importlib.machinery.SourceFileLoader("mdrctld", os.path.join(ROOT, "bin", "mdrctld")),
+        importlib.machinery.SourceFileLoader("mdrctld", os.path.join(ROOT, "daemon", "bin", "mdrctld")),
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

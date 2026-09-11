@@ -6,7 +6,7 @@ into an oversized buffer and look at what comes back. Bytes close to a value you
 can verify on the headphones themselves (battery percentage, say) are flagged,
 which is how you find which field is which.
 
-    ./tools/dump.py --expect 80
+    ./daemon/tools/dump.py --expect 80
 """
 import argparse, ctypes as C, os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
@@ -45,7 +45,7 @@ def main():
 
     build = os.environ.get(
         "MDR_BUILD",
-        os.path.join(os.path.dirname(__file__), "..", "vendor", "SonyHeadphonesClient", "build"))
+        os.path.join(os.path.dirname(__file__), "..", "..", "vendor", "SonyHeadphonesClient", "build"))
     lib = mdr.Library(build)
 
     with mdr.Headphones(lib, args.mac) as hp:
