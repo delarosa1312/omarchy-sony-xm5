@@ -9,7 +9,7 @@ state, and answers cheap questions about it over a Unix socket.
 
 Stop it (`systemctl --user stop mdrctld`) before using Sony's app.
 """
-import json, os, socket, sys, time, subprocess, signal, errno
+import json, os, select, socket, sys, time, subprocess, signal, errno
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
 import mdr
@@ -69,6 +69,8 @@ class Daemon:
         self.error = None
         self._last_write = 0.0
         self._features = {}
+        # Connections that asked to be told about changes instead of polling.
+        self.subscribers = []
 
     # -- session ---------------------------------------------------------
 
@@ -98,6 +100,10 @@ class Daemon:
             return
         try:
             hp = mdr.Headphones(self.lib, MAC)
+            # This session never closes, and the main loop pumps continuously,
+            # so a write does not need to sit and pump before returning. That
+            # wait was 200 ms on every single action.
+            hp.write_settle = 0.0
             hp.open()
         except mdr.MDRError as e:
             self.error = str(e)
@@ -250,6 +256,26 @@ class Daemon:
         with open(tmp, "w") as f:
             json.dump(s, f)
         os.replace(tmp, STATE)   # atomic: readers never see half a file
+        self.push(s)
+
+    def push(self, s):
+        """Tell the subscribers, so a widget does not have to poll for it."""
+        if not self.subscribers:
+            return
+        line = (json.dumps({"state": s}) + "\n").encode()
+        for conn in list(self.subscribers):
+            try:
+                conn.sendall(line)
+            except OSError:
+                self.drop_subscriber(conn)
+
+    def drop_subscriber(self, conn):
+        if conn in self.subscribers:
+            self.subscribers.remove(conn)
+        try:
+            conn.close()
+        except OSError:
+            pass
 
     # -- commands --------------------------------------------------------
 
@@ -407,40 +433,52 @@ class Daemon:
             os.unlink(SOCKET)
         srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         srv.bind(SOCKET)
-        srv.listen(8)
+        srv.listen(16)
         srv.setblocking(False)
 
         stop = []
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda *_: stop.append(True))
 
-        last_publish = 0.0
+        buffers = {}
+        last_refresh = 0.0
         while not stop:
             if self.hp is None:
                 self.connect()
 
             if self.hp:
                 try:
-                    self.hp.pump(50)
+                    self.hp.pump(20)
                 except Exception as e:
                     self.drop(str(e))
             else:
                 time.sleep(0.25)
 
-            try:
-                conn, _ = srv.accept()
-            except OSError as e:
-                if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
-                    raise
-            else:
-                self.serve(conn)
+            ready, _, _ = select.select([srv] + self.subscribers, [], [], 0)
+            dirty = False
+            for sock in ready:
+                if sock is srv:
+                    try:
+                        conn, _ = srv.accept()
+                    except OSError as e:
+                        if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                            raise
+                        continue
+                    if self.serve(conn):
+                        dirty = True
+                else:
+                    if self.serve_subscriber(sock, buffers):
+                        dirty = True
 
             now = time.monotonic()
-            if now - last_publish >= 0.5:
-                last_publish = now
+            # A command's effect should show immediately, not on the next tick.
+            if dirty or now - last_refresh >= 0.2:
+                last_refresh = now
                 self.publish(self.refresh())
 
         srv.close()
+        for conn in list(self.subscribers):
+            self.drop_subscriber(conn)
         for p in (SOCKET, STATE):
             try:
                 os.unlink(p)
@@ -449,17 +487,64 @@ class Daemon:
         if self.hp:
             self.hp.close()
 
-    def serve(self, conn):
-        with conn:
-            conn.settimeout(2.0)
+    def serve_subscriber(self, conn, buffers):
+        """A held-open connection: further lines on it are commands."""
+        try:
+            chunk = conn.recv(4096)
+        except OSError:
+            self.drop_subscriber(conn)
+            return False
+        if not chunk:
+            self.drop_subscriber(conn)
+            return False
+        buf = buffers.get(conn, b"") + chunk
+        acted = False
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            text = line.decode(errors="replace").strip()
+            if not text:
+                continue
+            reply = self.handle(text)
+            acted = True
             try:
-                line = conn.recv(4096).decode().strip()
-                reply = self.handle(line)
-                if reply.get("ok") and line.split()[:1] != ["status"]:
-                    reply["state"] = self.refresh()
                 conn.sendall((json.dumps(reply) + "\n").encode())
-            except (OSError, UnicodeDecodeError):
+            except OSError:
+                self.drop_subscriber(conn)
+                buffers.pop(conn, None)
+                return acted
+        buffers[conn] = buf
+        return acted
+
+    def serve(self, conn):
+        """One request on a fresh connection. `subscribe` keeps it open and
+        turns it into a push channel, which is what the bar widget uses so it
+        never has to poll."""
+        try:
+            conn.settimeout(2.0)
+            line = conn.recv(4096).decode(errors="replace").strip()
+        except (OSError, UnicodeDecodeError):
+            conn.close()
+            return False
+
+        if line == "subscribe":
+            conn.settimeout(None)
+            conn.setblocking(False)
+            self.subscribers.append(conn)
+            try:
+                conn.sendall((json.dumps({"state": self.state}) + "\n").encode())
+            except OSError:
+                self.drop_subscriber(conn)
+            return False
+
+        with conn:
+            reply = self.handle(line)
+            if reply.get("ok") and line.split()[:1] != ["status"]:
+                reply["state"] = self.refresh()
+            try:
+                conn.sendall((json.dumps(reply) + "\n").encode())
+            except OSError:
                 pass
+        return reply.get("ok", False)
 
 
 if __name__ == "__main__":

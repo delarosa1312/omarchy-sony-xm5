@@ -28,10 +28,45 @@ Panel {
 
   property var state: ({})
   property real nowSec: 0
-  // What we just asked for, held only long enough to cover the round trip to
-  // the daemon. The daemon does its own, longer-lived version of this: the
-  // headphones do not echo a session's own writes back to it.
-  property string pendingMode: ""
+  // What we have asked for but not yet seen confirmed, per field. Every control
+  // reads through this, so a click shows its effect at once rather than waiting
+  // for the daemon to notice and the panel to hear about it. An entry clears as
+  // soon as the device agrees, or after a few seconds if it never does.
+  property var pending: ({})
+
+  function eff(field, fallback) {
+    if (pending[field] !== undefined) return pending[field]
+    var v = state[field]
+    return v === undefined || v === null ? fallback : v
+  }
+
+  function claimField(field, value) {
+    var next = {}
+    for (var k in pending) next[k] = pending[k]
+    next[field] = value
+    pending = next
+    pendingSweep.restart()
+  }
+
+  function sameValue(a, b) {
+    if (Array.isArray(a) && Array.isArray(b)) {
+      if (a.length !== b.length) return false
+      for (var i = 0; i < a.length; i++) if (Number(a[i]) !== Number(b[i])) return false
+      return true
+    }
+    return a === b
+  }
+
+  // Once the device agrees, stop overriding: from then on the panel shows what
+  // the headphones actually report, including changes made on the headset.
+  function reconcile() {
+    var next = {}, changed = false
+    for (var k in pending) {
+      if (sameValue(pending[k], state[k])) changed = true
+      else next[k] = pending[k]
+    }
+    if (changed) pending = next
+  }
 
   readonly property string mac: setting("mac", "00:00:5E:00:53:01")
 
@@ -55,15 +90,14 @@ Panel {
 
   readonly property bool present: linked || (fresh && state.present === true)
   readonly property bool session: fresh && state.session === true
-  readonly property string reportedMode: state.mode !== undefined ? String(state.mode) : ""
-  readonly property string mode: pendingMode !== "" ? pendingMode : reportedMode
-  readonly property bool modeConfirmed: pendingMode === "" && state.mode_confirmed !== false
+  readonly property string mode: String(eff("mode", ""))
+  readonly property bool modeConfirmed: pending["mode"] === undefined && state.mode_confirmed !== false
   // The headset's own figure when we have a session -- it is per-part and
   // finer-grained -- and BlueZ's otherwise.
   readonly property int battery: fresh && state.battery !== undefined && state.battery !== null
     ? Number(state.battery) : bluezBattery
   readonly property bool charging: String(state.charging) === "yes"
-  readonly property int ambientLevel: state.ambient_level !== undefined ? Number(state.ambient_level) : 0
+  readonly property int ambientLevel: Number(eff("ambient_level", 0))
   readonly property int ambientMax: state.ambient_level_max !== undefined ? Number(state.ambient_level_max) : 20
   readonly property string buttonMode: state.button_mode !== undefined ? String(state.button_mode) : ""
   readonly property bool adaptive: state.adaptive === true
@@ -71,18 +105,18 @@ Panel {
   readonly property string errorText: state.error && state.error !== "null" ? String(state.error) : ""
 
   readonly property string eqPreset: state.eq_preset !== undefined ? String(state.eq_preset) : ""
-  readonly property var eqBands: state.eq_bands !== undefined ? state.eq_bands : []
+  readonly property var eqBands: eff("eq_bands", [])
   readonly property int eqBandLimit: state.eq_band_limit !== undefined ? Number(state.eq_band_limit) : 10
-  readonly property int clearBass: state.eq_clear_bass !== undefined ? Number(state.eq_clear_bass) : 0
-  readonly property bool dsee: state.dsee === true
+  readonly property int clearBass: Number(eff("eq_clear_bass", 0))
+  readonly property bool dsee: eff("dsee", false) === true
   readonly property string dseeType: state.dsee_type !== undefined ? String(state.dsee_type) : ""
-  readonly property string audioPriority: state.audio_priority !== undefined ? String(state.audio_priority) : ""
+  readonly property string audioPriority: String(eff("audio_priority", ""))
   readonly property string listening: state.listening !== undefined ? String(state.listening) : ""
   readonly property string roomSize: state.room_size !== undefined ? String(state.room_size) : ""
   readonly property int autoPowerOff: state.auto_power_off !== undefined ? Number(state.auto_power_off) : -1
   readonly property string wearingPower: state.wearing_power !== undefined ? String(state.wearing_power) : ""
-  readonly property bool autoPause: state.auto_pause === true
-  readonly property string powerOff: state.power_off !== undefined ? String(state.power_off) : ""
+  readonly property bool autoPause: eff("auto_pause", false) === true
+  readonly property string powerOff: String(eff("power_off", ""))
 
   // Only show what this device actually advertises. A control for something it
   // does not support is worse than no control: the write is accepted, committed
@@ -163,69 +197,66 @@ Panel {
   function open() {
     snapshotTaken = false          // each opening gets its own undo point
     root.controller.show()
-    stateFile.reload()
-    syncLocal()
+    takeSnapshot()
   }
+
   function close() { root.controller.hide() }
   function toggle() { opened ? close() : open() }
 
+  function applyState(next) {
+    state = next
+    nowSec = Date.now() / 1000
+    reconcile()
+    takeSnapshot()
+  }
+
   function parseState(text) {
-    if (!text || text === "") { root.state = ({}); return }
+    if (!text || text === "") { state = ({}); return }
     try {
-      root.state = JSON.parse(text)
+      applyState(JSON.parse(text))
     } catch (e) {
       // A half-written file would land here, but the daemon renames into
       // place, so readers only ever see a whole one.
       return
     }
-    if (pendingMode !== "" && reportedMode === pendingMode) pendingMode = ""
   }
 
-  function run(args) {
-    cmd.command = [root.mdrctl].concat(args)
-    cmd.running = true
+  // One connection, held open, carrying commands out and state back. Spawning
+  // a process per click cost 22 ms and, worse, gave the daemon no way to tell
+  // the panel about a change -- which is why this used to poll a file.
+  function send(args, field, value) {
+    if (field !== undefined) claimField(field, value)
+    if (!link.connected) return false
+    link.write(args.join(" ") + "\n")
+    link.flush()
+    return true
   }
 
   function setMode(name) {
     if (!session || name === "" || name === mode) return
-    pendingMode = name
-    pendingClear.restart()
-    run(["mode", name])
+    send(["mode", name], "mode", name)
   }
 
   function cycleMode() {
     if (!session) return
     var order = ["cancelling", "ambient", "off"]
     var at = order.indexOf(mode)
-    setMode(order[(at < 0 ? -1 : at) + 1 >= order.length ? 0 : (at < 0 ? 0 : at + 1)])
+    setMode(order[at < 0 ? 0 : (at + 1) % order.length])
   }
 
   function setAmbient(level) {
     if (!session) return
     var clamped = Math.max(0, Math.min(ambientMax, Math.round(level)))
-    pendingMode = "ambient"
-    pendingClear.restart()
-    run(["ambient", String(clamped)])
+    claimField("mode", "ambient")
+    send(["ambient", String(clamped)], "ambient_level", clamped)
   }
 
-  function nudgeAmbient(step) {
-    setAmbient(ambientLevel + step)
-  }
-
-  // Band frequencies for the five-band layout this family uses.
-  readonly property var bandLabels: ["400", "1k", "2.5k", "6.3k", "16k"]
+  function nudgeAmbient(step) { setAmbient(ambientLevel + step) }
 
   property bool eqExpanded: false
 
-  // The sliders read this, not the daemon's copy. Binding a slider straight to
-  // polled state means that between releasing the knob and the daemon noticing,
-  // the old value comes back and throws the knob somewhere else -- which is the
-  // "jumps to a random number". So hold what the user chose, and take the
-  // device's word again only once nothing is in flight.
-  property var localBands: []
-  property int localClearBass: 0
-  property int inFlight: 0
-  property var queued: null
+  // Band frequencies for the five-band layout this family uses.
+  readonly property var bandLabels: ["400", "1k", "2.5k", "6.3k", "16k"]
 
   // What the equaliser looked like when the panel was opened, so a slip can be
   // undone. Captured on open rather than on first edit: by the time you know
@@ -233,121 +264,117 @@ Panel {
   property var snapshotBands: []
   property int snapshotClearBass: 0
   property bool snapshotTaken: false
+
+  function takeSnapshot() {
+    if (snapshotTaken || eqBands.length === 0) return
+    snapshotBands = eqBands.slice()
+    snapshotClearBass = clearBass
+    snapshotTaken = true
+  }
+
   readonly property bool eqChanged: {
-    if (!snapshotTaken || snapshotBands.length !== localBands.length) return false
-    if (snapshotClearBass !== localClearBass) return true
-    for (var i = 0; i < localBands.length; i++)
-      if (Number(snapshotBands[i]) !== Number(localBands[i])) return true
+    if (!snapshotTaken || snapshotBands.length !== eqBands.length) return false
+    if (snapshotClearBass !== clearBass) return true
+    for (var i = 0; i < eqBands.length; i++)
+      if (Number(snapshotBands[i]) !== Number(eqBands[i])) return true
     return false
   }
 
-  function syncLocal() {
-    if (inFlight > 0) return          // our own write is still on its way
-    localBands = eqBands.slice()
-    localClearBass = clearBass
-    if (!snapshotTaken && eqBands.length > 0) {
-      snapshotBands = eqBands.slice()
-      snapshotClearBass = clearBass
-      snapshotTaken = true
-    }
+  function setBands(values) {
+    if (!session || values.length === 0) return
+    send(["bands", values.join(",")], "eq_bands", values)
   }
 
-  onEqBandsChanged: syncLocal()
-  onClearBassChanged: syncLocal()
-
-  function sendEq() {
-    if (!session || localBands.length === 0) return
-    var args = ["bands", localBands.join(",")]
-    if (cmd.running) { queued = args; return }
-    inFlight++
-    cmd.command = [root.mdrctl].concat(args)
-    cmd.running = true
+  function setBand(index, value) {
+    if (!session || index < 0 || index >= eqBands.length) return
+    var next = eqBands.slice()
+    next[index] = Math.round(value)
+    setBands(next)
   }
 
-  function sendClearBass(v) {
+  function setClearBass(v) {
     if (!session) return
-    var args = ["clear-bass", String(Math.round(v))]
-    if (cmd.running) { queued = args; return }
-    inFlight++
-    cmd.command = [root.mdrctl].concat(args)
-    cmd.running = true
+    send(["clear-bass", String(Math.round(v))], "eq_clear_bass", Math.round(v))
   }
 
   function undoEq() {
     if (!snapshotTaken) return
-    localBands = snapshotBands.slice()
-    localClearBass = snapshotClearBass
-    sendEq()
-    sendClearBass(snapshotClearBass)
+    setBands(snapshotBands.slice())
+    setClearBass(snapshotClearBass)
   }
 
-  function setBand(index, value) {
-    if (!session || index < 0 || index >= localBands.length) return
-    var next = localBands.slice()
-    next[index] = Math.round(value)
-    localBands = next
-    sendEq()
+  function setDsee(on) { if (session) send(["dsee", on ? "on" : "off"], "dsee", on) }
+  function setPriority(p) { if (session && p !== audioPriority) send(["priority", p], "audio_priority", p) }
+  function setPowerOff(label) {
+    if (session) send(["power-off", powerOffValue(label)], "power_off", powerOffValue(label))
   }
-  function setClearBass(v) { localClearBass = Math.round(v); sendClearBass(v) }
-  function setDsee(on) { if (session) run(["dsee", on ? "on" : "off"]) }
-  function setPriority(p) { if (session && p !== audioPriority) run(["priority", p]) }
-  function setPowerOff(label) { if (session) run(["power-off", powerOffValue(label)]) }
-  function setAutoPause(on) { if (session) run(["auto-pause", on ? "on" : "off"]) }
-  function powerOff() { if (session) run(["shutdown"]) }
+  function setAutoPause(on) { if (session) send(["auto-pause", on ? "on" : "off"], "auto_pause", on) }
+  function powerOff() { if (session) send(["shutdown"]) }
 
   function startDaemon() {
     daemonCmd.command = ["systemctl", "--user", "start", "mdrctld"]
     daemonCmd.running = true
   }
 
+  // The daemon pushes every change down this socket, so there is nothing to
+  // poll and a click shows up as fast as the device answers.
+  Socket {
+    id: link
+    path: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/mdrctl/sock"
+    connected: true
+    onConnectedChanged: if (connected) write("subscribe\n")
+
+    parser: SplitParser {
+      splitMarker: "\n"
+      onRead: function(line) {
+        try {
+          var msg = JSON.parse(line)
+          if (msg.state) root.applyState(msg.state)
+        } catch (e) {
+          return
+        }
+      }
+    }
+  }
+
+  // The socket is the fast path; this is the safety net for when the daemon is
+  // not there to connect to, and the only source of truth about its absence.
   FileView {
     id: stateFile
     path: root.statePath
     watchChanges: true
     printErrors: false
-    onLoaded: root.parseState(text())
-    onFileChanged: reload()
+    onLoaded: if (!link.connected) root.parseState(text())
+    onFileChanged: if (!link.connected) reload()
     onLoadFailed: root.state = ({})
   }
 
-  // The daemon replaces the state file by rename, which a path watcher can
-  // lose track of, so the watch is a bonus and this timer is the guarantee.
-  // Slow when nobody is looking at it.
   Timer {
-    interval: root.opened ? 700 : 3000
+    // Only has to notice that the daemon went away, and reconnect when it is
+    // back; everything else arrives by push.
+    interval: 2000
     running: true
     repeat: true
     triggeredOnStart: true
     onTriggered: {
       root.nowSec = Date.now() / 1000
-      stateFile.reload()
-    }
-  }
-
-  Timer {
-    id: pendingClear
-    interval: 4000
-    onTriggered: root.pendingMode = ""
-  }
-
-  Process {
-    id: cmd
-    onExited: {
-      if (root.inFlight > 0) root.inFlight--
-      stateFile.reload()
-      if (root.queued) {
-        var next = root.queued
-        root.queued = null
-        root.inFlight++
-        cmd.command = [root.mdrctl].concat(next)
-        cmd.running = true
+      if (!link.connected) {
+        link.connected = true
+        stateFile.reload()
       }
     }
   }
 
+  Timer {
+    // A claim the device never contradicts would otherwise stick forever.
+    id: pendingSweep
+    interval: 5000
+    onTriggered: root.pending = ({})
+  }
+
   Process {
     id: daemonCmd
-    onExited: stateFile.reload()
+    onExited: { link.connected = true; stateFile.reload() }
   }
 
   KeyboardPanel {
@@ -542,7 +569,7 @@ Panel {
             spacing: Style.space(6)
 
             Repeater {
-              model: root.localBands.length
+              model: root.eqBands.length
 
               Item {
                 id: bandItem
@@ -567,7 +594,7 @@ Panel {
                   Text {
                     anchors.right: parent.right
                     text: {
-                      var v = Number(root.localBands[bandItem.index])
+                      var v = Number(root.eqBands[bandItem.index])
                       return (v > 0 ? "+" : "") + v
                     }
                     color: root.foreground
@@ -585,7 +612,7 @@ Panel {
                   maximum: root.eqBandLimit
                   step: 1
                   integer: true
-                  value: Number(root.localBands[bandItem.index])
+                  value: Number(root.eqBands[bandItem.index])
                   onReleased: function(v) { root.setBand(bandItem.index, v) }
                   WheelBlocker { anchors.fill: parent; scrollTarget: flick }
                 }
@@ -607,7 +634,7 @@ Panel {
 
               Text {
                 anchors.right: parent.right
-                text: (root.localClearBass > 0 ? "+" : "") + root.localClearBass
+                text: (root.clearBass > 0 ? "+" : "") + root.clearBass
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
@@ -621,7 +648,7 @@ Panel {
               maximum: root.eqBandLimit
               step: 1
               integer: true
-              value: root.localClearBass
+              value: root.clearBass
               onReleased: function(v) { root.setClearBass(v) }
               WheelBlocker { anchors.fill: parent; scrollTarget: flick }
             }

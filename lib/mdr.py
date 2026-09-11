@@ -214,6 +214,12 @@ class Library:
 class Headphones:
     """One control session. Use as a context manager."""
 
+    # How long a write pumps the protocol before returning. A one-shot caller
+    # that closes straight after a write needs this, or the frame never leaves.
+    # A long-lived session pumps anyway, so it sets this to zero and saves the
+    # wait on every single action.
+    write_settle = 0.2
+
     def __init__(self, lib, mac, uuid=XM5_SERVICE_UUID, protocol=PROTOCOL_V2):
         self.lib, self.mac, self.uuid, self.protocol = lib, mac, uuid, protocol
         self._handle = self._conn = None
@@ -292,7 +298,7 @@ class Headphones:
             raise MDRError(f"noise control read failed: {self.lib.result(r)}")
         return nc
 
-    def set_noise_control(self, nc, settle=0.2):
+    def set_noise_control(self, nc, settle=None):
         """Write a noise-control state and commit it.
 
         Deliberately does not wait for a read-back. A session is not reliably
@@ -305,7 +311,7 @@ class Headphones:
         if r != RESULT_OK:
             raise MDRError(f"noise control write failed: {self.lib.result(r)}")
         self.lib.hp_commit(self._hp)
-        deadline = time.monotonic() + settle
+        deadline = time.monotonic() + (self.write_settle if settle is None else settle)
         while time.monotonic() < deadline:
             self.pump(20)
         return nc
@@ -344,14 +350,14 @@ class Headphones:
             raise MDRError(f"equalizer read failed: {self.lib.result(r)}")
         return eq
 
-    def set_equalizer(self, eq, settle=0.2):
+    def set_equalizer(self, eq, settle=None):
         """Writes are fire-and-forget, for the same reason as noise control:
         the device does not echo a session's own changes back to it."""
         r = self.lib.set_eq(self._hp, C.byref(eq))
         if r != RESULT_OK:
             raise MDRError(f"equalizer write failed: {self.lib.result(r)}")
         self.lib.hp_commit(self._hp)
-        deadline = time.monotonic() + settle
+        deadline = time.monotonic() + (self.write_settle if settle is None else settle)
         while time.monotonic() < deadline:
             self.pump(20)
         return eq
@@ -422,7 +428,7 @@ class Headphones:
     # rejects anything else, and rejects a count that is not 5 or 10.
     BAND_LIMITS = {5: 10, 10: 6}
 
-    def set_equalizer_bands(self, values, settle=0.2):
+    def set_equalizer_bands(self, values, settle=None):
         values = [int(v) for v in values]
         limit = self.BAND_LIMITS.get(len(values))
         if limit is None:
@@ -434,7 +440,7 @@ class Headphones:
         if r != RESULT_OK:
             raise MDRError(f"equalizer band write failed: {self.lib.result(r)}")
         self.lib.hp_commit(self._hp)
-        deadline = time.monotonic() + settle
+        deadline = time.monotonic() + (self.write_settle if settle is None else settle)
         while time.monotonic() < deadline:
             self.pump(20)
         return list(values)
@@ -448,7 +454,7 @@ class Headphones:
             raise MDRError(f"connection mode read failed: {self.lib.result(r)}")
         return cm
 
-    def set_audio_priority(self, priority, settle=0.2):
+    def set_audio_priority(self, priority, settle=None):
         """'quality' asks for LDAC's higher bitrate, 'stability' drops it."""
         if isinstance(priority, str):
             if priority not in AUDIO_PRIORITY_BY_NAME:
@@ -459,7 +465,7 @@ class Headphones:
         if r != RESULT_OK:
             raise MDRError(f"connection mode write failed: {self.lib.result(r)}")
         self.lib.hp_commit(self._hp)
-        deadline = time.monotonic() + settle
+        deadline = time.monotonic() + (self.write_settle if settle is None else settle)
         while time.monotonic() < deadline:
             self.pump(20)
         return cm
@@ -471,12 +477,12 @@ class Headphones:
             raise MDRError(f"power read failed: {self.lib.result(r)}")
         return pw
 
-    def set_power(self, pw, settle=0.2):
+    def set_power(self, pw, settle=None):
         r = self.lib.set_power(self._hp, C.byref(pw))
         if r != RESULT_OK:
             raise MDRError(f"power write failed: {self.lib.result(r)}")
         self.lib.hp_commit(self._hp)
-        deadline = time.monotonic() + settle
+        deadline = time.monotonic() + (self.write_settle if settle is None else settle)
         while time.monotonic() < deadline:
             self.pump(20)
         return pw
@@ -495,7 +501,7 @@ class Headphones:
             raise MDRError(f"listening read failed: {self.lib.result(r)}")
         return ls
 
-    def set_listening_mode(self, mode, room=None, settle=0.2):
+    def set_listening_mode(self, mode, room=None, settle=None):
         if isinstance(mode, str):
             if mode not in LISTENING_MODE_BY_NAME:
                 raise ValueError(f"mode must be one of {sorted(LISTENING_MODE_BY_NAME)}")
@@ -510,7 +516,7 @@ class Headphones:
         if r != RESULT_OK:
             raise MDRError(f"listening write failed: {self.lib.result(r)}")
         self.lib.hp_commit(self._hp)
-        deadline = time.monotonic() + settle
+        deadline = time.monotonic() + (self.write_settle if settle is None else settle)
         while time.monotonic() < deadline:
             self.pump(20)
         return ls
