@@ -107,6 +107,11 @@ Panel {
   readonly property int ambientLevel: Number(eff("ambient_level", 0))
   readonly property int ambientMax: state.ambient_level_max !== undefined ? Number(state.ambient_level_max) : 20
   readonly property string buttonMode: state.button_mode !== undefined ? String(state.button_mode) : ""
+  // How many of the reported facts actually apply right now. Two or more earn
+  // a header; one does not.
+  readonly property int reportedCount:
+    (buttonMode !== "" ? 1 : 0) + (adaptive ? 1 : 0)
+    + (session && mode === "ambient" ? 1 : 0)
   readonly property bool adaptive: state.adaptive === true
   readonly property bool focusOnVoice: state.focus_on_voice === true
   readonly property string errorText: state.error && state.error !== "null" ? String(state.error) : ""
@@ -1050,14 +1055,16 @@ Panel {
 
         // ---- detail ------------------------------------------------------
         // Things the headset tells us about itself. None of them are settable
-        // from here, which the header says once rather than each row saying it.
+        // from here, which the header says once rather than each row saying it
+        // -- but a header, a gap and one fact is a lot of frame for one fact,
+        // so below two rows the rows speak for themselves.
         Column {
           width: parent.width
           spacing: Style.spacing.labelGap
-          visible: root.buttonMode !== "" || root.adaptive
-                   || (root.session && root.mode === "ambient")
+          visible: root.reportedCount > 0
 
           PanelSectionHeader {
+            visible: root.reportedCount > 1
             text: "REPORTED"
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -1065,7 +1072,9 @@ Panel {
 
           InfoRow {
             visible: root.buttonMode !== ""
-            label: "Button"
+            // "Button" alone reads like an abbreviation you are expected to
+            // know. It is the button on the headset, and this says which.
+            label: "Headset button"
             value: root.buttonMode
           }
           InfoRow {
