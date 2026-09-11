@@ -1,7 +1,13 @@
 # mdrctl
 
-Control Sony MDR headphones (WH-1000XM5 and relatives) from Linux, with the aim
-of driving them from a small Omarchy bar widget rather than Sony's app.
+Control Sony MDR headphones from Linux, with the aim of driving them from a
+small Omarchy bar widget rather than Sony's app.
+
+Written against a **WH-1000XM5** and a **WF-1000XM5**, which are the only two
+devices any of this has been run on. Devices are found by the MDR service they
+advertise rather than by a list of addresses, and every control is gated on
+what the device says it supports, so another Sony model has a fair chance of
+working -- but nobody has tried one, and the notes below describe those two.
 
 ## Why this shape
 
@@ -88,13 +94,13 @@ command widget can only print a line and run a command on click -- it cannot
 open anything.
 
     ./scripts/sync-plugin.sh push      # repo -> ~/.config/omarchy/plugins/
-    omarchy plugin enable io.github.delarosa1312.headphones
+    omarchy plugin enable io.github.delarosa1312.sony-xm5
 
 The shell hot-reloads plugin *files*, but the QML engine goes on serving the
 component it already compiled, so a change needs `omarchy restart shell`. The
 push script does that for you.
 
-Edit the copy under `~/.config/omarchy/plugins/io.github.delarosa1312.headphones/` and run
+Edit the copy under `~/.config/omarchy/plugins/io.github.delarosa1312.sony-xm5/` and run
 `./scripts/sync-plugin.sh` to bring it back here.
 
 The panel takes battery and connected state from BlueZ through

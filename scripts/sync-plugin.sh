@@ -5,7 +5,7 @@
 # (default), push = repo -> live.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ID=io.github.delarosa1312.headphones
+ID=io.github.delarosa1312.sony-xm5
 LIVE="$HOME/.config/omarchy/plugins/$ID"
 REPO="$ROOT/shell-plugin"
 

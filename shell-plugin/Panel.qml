@@ -15,7 +15,7 @@ import "Model.js" as Model
 // never try to open its own.
 Panel {
   id: root
-  moduleName: "io.github.delarosa1312.headphones"
+  moduleName: "io.github.delarosa1312.sony-xm5"
   ipcTarget: ""            // the bar widget owns the IPC target
   manageIpc: false
 

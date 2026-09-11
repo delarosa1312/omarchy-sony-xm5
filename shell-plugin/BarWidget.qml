@@ -8,7 +8,7 @@ import qs.Ui
 // same arrangement omarchy.weather uses.
 BarWidget {
   id: root
-  moduleName: "io.github.delarosa1312.headphones"
+  moduleName: "io.github.delarosa1312.sony-xm5"
 
   readonly property var panel: panelLoader.item
 
@@ -57,7 +57,7 @@ BarWidget {
   }
 
   IpcHandler {
-    target: "io.github.delarosa1312.headphones"
+    target: "io.github.delarosa1312.sony-xm5"
 
     function open(): void { root.open() }
     function close(): void { root.close() }

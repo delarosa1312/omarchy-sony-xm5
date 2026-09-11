@@ -1,16 +1,21 @@
-# Headphones — Sony MDR control for the Omarchy bar
+# Sony XM5 — headphone controls for the Omarchy bar
 
 ![The panel](preview.png)
 
-A bar widget for Sony headphones and earbuds that speak the MDR protocol —
-WH-1000XM5, WF-1000XM5 and relatives. Battery in the bar, and a panel for
-noise control, the equaliser, DSEE, auto pause and the headset's other
-connections.
+A bar widget for the **Sony WH-1000XM5** headphones and **WF-1000XM5**
+earbuds. Battery in the bar, and a panel for noise control, the equaliser,
+DSEE, auto pause and the headset's other connections.
 
-There is no address to configure. The daemon takes whichever connected device
-offers the MDR service, so switching from the headphones to the buds needs
-nothing from you: the panel retitles itself and shows the controls that pair
-actually has.
+Those two are the only devices this has been run against, and they are what
+it claims to support. Other Sony models that speak MDR may well work — the
+device is found by the service it offers rather than by a list of addresses,
+and every control is gated on what that device says it has, so a model without
+DSEE simply shows no DSEE. But "may well work" is not "tested", and only those
+two have been.
+
+Between those two there is nothing to configure. The daemon takes whichever
+one is connected, so swapping headphones for earbuds needs nothing from you:
+the panel retitles itself and shows the controls that pair actually has.
 
 ## What it shows
 
@@ -29,8 +34,9 @@ device does not support is accepted, committed locally and never sent, so a
 control that is always drawn would look like it worked and silently do nothing.
 
 Three settings are shown but not offered — connection quality, the auto
-power-off timer and the equaliser presets. This device family acknowledges
-those commands and then keeps the old value. They carry a lock and say so on
+power-off timer and the equaliser presets. Both XM5 models acknowledge those
+commands and then keep the old value, which was established by writing them
+and reconnecting to see what actually stuck. They carry a lock and say so on
 hover, rather than pretending to be controls.
 
 ## Requires
@@ -49,12 +55,12 @@ mdrctl install sets that up.
 
 ## Install
 
-    omarchy plugin add https://github.com/delarosa1312/omarchy-headphones.git --enable
+    omarchy plugin add https://github.com/delarosa1312/omarchy-sony-xm5.git --enable
 
 ## Place it on the bar
 
-    omarchy bar move io.github.delarosa1312.headphones --section right
-    omarchy bar move io.github.delarosa1312.headphones --before omarchy.bluetooth
+    omarchy bar move io.github.delarosa1312.sony-xm5 --section right
+    omarchy bar move io.github.delarosa1312.sony-xm5 --before omarchy.bluetooth
 
 ## Use
 
@@ -71,7 +77,7 @@ because scrolling a panel past a slider used to commit every slider it passed.
 
 ## Remove
 
-    omarchy plugin remove io.github.delarosa1312.headphones
+    omarchy plugin remove io.github.delarosa1312.sony-xm5
 
 ## Develop
 
