@@ -37,10 +37,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--expect", type=int, action="append", default=[],
                     help="value you know is true right now, e.g. battery percent")
-    ap.add_argument("--mac", default=os.environ.get("MDR_MAC", "00:00:5E:00:53:01"))
+    ap.add_argument("--mac", default=None)
     ap.add_argument("--settle", type=float, default=3.0,
                     help="seconds to pump events before reading")
     args = ap.parse_args()
+    args.mac = mdr.device_address(args.mac)
 
     build = os.environ.get(
         "MDR_BUILD",

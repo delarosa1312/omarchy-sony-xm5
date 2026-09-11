@@ -4,7 +4,7 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 import mdr
 
-MAC = os.environ.get("MDR_MAC", "00:00:5E:00:53:01")
+MAC = mdr.device_address(sys.argv[1] if len(sys.argv) > 1 else None)
 BUILD = os.environ.get(
     "MDR_BUILD",
     os.path.join(os.path.dirname(__file__), "..", "vendor", "SonyHeadphonesClient", "build"),

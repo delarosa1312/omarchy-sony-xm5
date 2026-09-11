@@ -14,7 +14,7 @@ build = os.environ.get(
     os.path.join(os.path.dirname(__file__), "..", "vendor", "SonyHeadphonesClient", "build"))
 lib = mdr.Library(build)
 
-with mdr.Headphones(lib, os.environ.get("MDR_MAC", "00:00:5E:00:53:01")) as hp:
+with mdr.Headphones(lib, mdr.device_address()) as hp:
     t0 = time.monotonic()
     last = None
     while time.monotonic() - t0 < seconds:

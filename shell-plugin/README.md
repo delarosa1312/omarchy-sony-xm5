@@ -75,6 +75,17 @@ to what it was when the panel opened. Escape closes.
 The equaliser is collapsed by default and its sliders ignore the scroll wheel,
 because scrolling a panel past a slider used to commit every slider it passed.
 
+## Optional: battery while the daemon is stopped
+
+With `mdrctld` running, this configures itself. Without it, BlueZ still knows
+the battery level — but not which of your devices to ask about, so give it the
+address if you want a reading in that case:
+
+    omarchy bar set io.github.delarosa1312.sony-xm5 mac AA:BB:CC:DD:EE:FF
+
+`bluetoothctl devices Connected` will tell you the address. Nothing else needs
+it, and the panel ignores it entirely while the daemon is up.
+
 ## Remove
 
     omarchy plugin remove io.github.delarosa1312.sony-xm5

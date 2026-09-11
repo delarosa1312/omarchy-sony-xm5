@@ -25,6 +25,24 @@ RESULT_INPROGRESS = 1
 AVAILABILITY = {0: "unknown", 1: "unavailable", 2: "available"}
 
 PACKET_RX, PACKET_TX = 0, 1
+
+def device_address(argv_value=None):
+    """Which headphones a tool should talk to.
+
+    There is no default. A real address baked into a repository belongs to one
+    person's hardware, is of no use to anyone else, and is not theirs to
+    publish -- the daemon finds the headphones by the service they advertise,
+    and these tools take the address from the caller.
+    """
+    import os
+    value = argv_value or os.environ.get("MDR_MAC", "")
+    if not value:
+        raise SystemExit(
+            "no device given. Pass the address, or set MDR_MAC.\n"
+            "  bluetoothctl devices Connected   lists what is connected now")
+    return value.upper()
+
+
 # Frame layout is [start][data type][seq][len:4][payload][checksum][end], so the
 # type is the second byte. An inbound frame of type ACK is the device saying it
 # received the last command -- the one real acknowledgement this protocol gives.

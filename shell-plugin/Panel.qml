@@ -46,12 +46,13 @@ Panel {
     if (next !== null) pending = next
   }
 
-  // Whichever Sony device the daemon found. The setting is only a fallback
-  // for the moments when there is no daemon to ask -- it is no longer the
-  // thing that decides which headphones this widget is about.
+  // Whichever Sony device the daemon found. The `mac` setting is only a
+  // fallback for the moments when there is no daemon to ask -- it decides
+  // nothing while one is running, and there is deliberately no default: an
+  // address baked in here would be one author's hardware.
   readonly property string mac:
     state.mac !== undefined && state.mac !== "" ? String(state.mac)
-                                                : setting("mac", "00:00:5E:00:53:01")
+                                                : setting("mac", "")
   readonly property string model:
     state.model !== undefined && state.model !== "" ? String(state.model)
                                                     : setting("name", "Headphones")
@@ -60,6 +61,7 @@ Panel {
   // are without any control session, so the widget survives a stopped daemon
   // instead of vanishing with it.
   readonly property var device: {
+    if (root.mac === "") return null
     var list = Bluetooth.devices ? Bluetooth.devices.values : []
     for (var i = 0; i < list.length; i++)
       if (String(list[i].address).toUpperCase() === root.mac.toUpperCase()) return list[i]
