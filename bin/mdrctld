@@ -68,6 +68,7 @@ class Daemon:
         self.next_attempt = 0.0
         self.backoff = 2.0
         self.error = None
+        self._last_write = 0.0
 
     # -- session ---------------------------------------------------------
 
@@ -158,9 +159,20 @@ class Daemon:
         return s
 
     def publish(self, s):
-        if s == self.state:
+        """Write the state file, and keep writing it even when nothing changes.
+
+        `updated` is how a reader tells a live daemon from a stopped one, so a
+        file that stops moving has to mean something. Without the heartbeat a
+        stale file reads exactly like a healthy one, and a widget goes on
+        offering controls that have nobody left to answer them.
+        """
+        now = time.monotonic()
+        unchanged = ({k: v for k, v in s.items() if k != "updated"}
+                     == {k: v for k, v in self.state.items() if k != "updated"})
+        if unchanged and now - self._last_write < 2.0:
             return
         self.state = s
+        self._last_write = now
         tmp = STATE + ".new"
         with open(tmp, "w") as f:
             json.dump(s, f)
@@ -256,7 +268,7 @@ class Daemon:
                 self.publish(self.refresh())
 
         srv.close()
-        for p in (SOCKET,):
+        for p in (SOCKET, STATE):
             try:
                 os.unlink(p)
             except OSError:

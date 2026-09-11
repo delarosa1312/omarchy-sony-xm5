@@ -50,8 +50,10 @@ The probing tools remain, for looking at a device this does not yet understand:
 
     mdrctld  ── holds the one control session, publishes state, takes commands
        |          $XDG_RUNTIME_DIR/mdrctl/{state.json,sock}
-       +── mdrctl              a socket away: status, watch, mode, cycle
-       +── bar/omarchy-headphones   reads state.json only, prints Waybar JSON
+       +── mdrctl               a socket away: status, watch, mode, cycle
+       +── shell-plugin/        the Omarchy bar widget and its popup
+       +── bar/omarchy-headphones   a plain Waybar-JSON script, kept as a
+                                    fallback for bars without a plugin system
 
 The split exists because connecting is expensive and exclusive. A handshake
 costs several seconds and locks everyone else out, so a bar widget cannot open
@@ -62,6 +64,29 @@ reads a file.
 That also means the widget keeps working when the daemon is stopped -- BlueZ
 publishes the battery over `org.bluez.Battery1` from the HFP indicator, with no
 session needed, and the two agree. Only the noise mode needs the session.
+
+## The bar widget
+
+`shell-plugin/` is an Omarchy shell plugin: a chip on the bar and a popup with
+the noise modes as a button group, an ambient-level slider, and the details.
+It is a proper plugin rather than a `command` entry in `shell.json` because a
+command widget can only print a line and run a command on click -- it cannot
+open anything.
+
+    ./scripts/sync-plugin.sh push      # repo -> ~/.config/omarchy/plugins/
+    omarchy plugin enable delarosa.headphones
+
+The shell hot-reloads plugin *files*, but the QML engine goes on serving the
+component it already compiled, so a change needs `omarchy restart shell`. The
+push script does that for you.
+
+Edit the copy under `~/.config/omarchy/plugins/delarosa.headphones/` and run
+`./scripts/sync-plugin.sh` to bring it back here.
+
+The panel takes battery and connected state from BlueZ through
+`Quickshell.Bluetooth`, so the widget still works with the daemon stopped --
+it dims the mode buttons and offers to start it. Noise control is the only
+part that needs the session.
 
 ## Facts worth keeping
 
@@ -77,8 +102,10 @@ session needed, and the two agree. Only the noise mode needs the session.
 
 ## Status
 
-Working: the daemon, the CLI, and the bar widget. The widget shows battery and
-noise mode and cycles the mode on click.
+Working: the daemon, the CLI, and the Omarchy bar widget with its popup.
+Verified: battery and mode readout, the stopped-daemon fallback, and recovery
+when the daemon comes back. Not yet verified by ear: the mode buttons and the
+ambient slider in the popup.
 
 Reading works. `./tools/probe.py` reports the real battery level, and
 `./tools/dump.py` returns data from every endpoint the device supports.
@@ -154,7 +181,8 @@ would answer it. Worth doing for curiosity; nothing is waiting on it.
 
 ## Next
 
-- the click cycle needs one real test with the headphones on a head
-- `bin/mdrctl ambient N` is written but unverified
-- equalizer is readable and untouched; a scroll-to-adjust ambient level would
-  need to know whether the bar's command widget has an `onScroll`
+- the popup's mode buttons and ambient slider need one test with the
+  headphones on a head
+- the popup's "Start mdrctld" button is the one control not exercised yet
+- equalizer is readable and untouched
+- focus-on-voice is read but not writable from the popup

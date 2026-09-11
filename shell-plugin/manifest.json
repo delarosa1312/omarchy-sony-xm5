@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "delarosa.headphones",
+  "name": "Headphones",
+  "version": "1.0.0",
+  "author": "delarosa",
+  "license": "MIT",
+  "description": "Sony WH-1000XM5 battery and noise control, driven by mdrctl",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Headphones",
+    "description": "Sony WH-1000XM5 battery and noise control",
+    "category": "Audio",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
