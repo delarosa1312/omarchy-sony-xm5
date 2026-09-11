@@ -73,6 +73,8 @@ class Daemon:
         self._last_write = 0.0
         self._last_liveness = 0.0
         self._features = {}
+        self._setting_index = {}
+        self._adapter_mac = None
         # Connections that asked to be told about changes instead of polling.
         self.subscribers = []
         # Frames the device has acknowledged. The protocol does answer every
@@ -102,6 +104,14 @@ class Daemon:
             if self.path is None:
                 return False
         return bluez_get(self.path, "org.bluez.Device1", "Connected") == "true"
+
+    def adapter_mac(self):
+        """This machine's own Bluetooth address, so it can be told apart from
+        the phone in the headset's list of who it is connected to."""
+        if self._adapter_mac is None and self.path:
+            value = bluez_get(self.path.rsplit("/", 1)[0], "org.bluez.Adapter1", "Address")
+            self._adapter_mac = (value or "").strip('"').upper()
+        return self._adapter_mac or ""
 
     def bluez_battery(self):
         """Battery without a session. BlueZ gets this from the HFP indicator,
@@ -142,6 +152,8 @@ class Daemon:
             self._features = self.hp.features()
         except mdr.MDRError:
             self._features = {}
+        self._setting_index = {}
+        self._adapter_mac = None
 
     def trace(self, kind, detail):
         if self._trace:
@@ -274,6 +286,25 @@ class Daemon:
             ls = self.hp.get_listening()
             s["listening"] = mdr.LISTENING_MODE.get(ls.mode, ls.mode)
             s["room_size"] = mdr.ROOM_SIZE.get(ls.background_room, ls.background_room)
+        except mdr.MDRError:
+            pass
+        try:
+            settings = self.hp.general_settings()
+            self._setting_index = {k: v["index"] for k, v in settings.items()}
+            for name, entry in settings.items():
+                s[name] = entry["value"]
+        except mdr.MDRError:
+            pass
+        try:
+            # The headset's own view of who it is talking to. This is the only
+            # way to see the phone from here -- BlueZ knows nothing about the
+            # headset's other links.
+            devices = self.hp.paired_devices()
+            s["devices"] = devices
+            mine = self.adapter_mac()
+            s["others_connected"] = sorted(
+                d["name"] or d["mac"] for d in devices
+                if d["connected"] and d["mac"].upper() not in (MAC.upper(), mine))
         except mdr.MDRError:
             pass
 
@@ -530,6 +561,22 @@ class Daemon:
                                "auto_pause", args[0] == "on")
         if cmd == "shutdown":
             return self.shutdown_headphones()
+        if cmd in ("multipoint", "touch-panel"):
+            field = cmd.replace("-", "_")
+            if not args or args[0] not in ("on", "off"):
+                return {"ok": False, "error": f"{cmd} takes on or off"}
+            index = self._setting_index.get(field)
+            if index is None:
+                return {"ok": False, "error": f"this device has no {field} setting"}
+            want = args[0] == "on"
+            return self.simple(lambda: self.hp.set_general_setting(index, want),
+                               field, want)
+        if cmd == "device":
+            if len(args) < 2 or args[0] not in mdr.PAIRED_COMMAND:
+                return {"ok": False,
+                        "error": "device takes connect|disconnect|playback|unpair and a MAC"}
+            action, mac = args[0], args[1]
+            return self.simple(lambda: self.hp.paired_device_action(action, mac))
         if cmd == "reconnect":
             self.drop("reconnect requested")
             self.next_attempt = 0.0

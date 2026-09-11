@@ -30,6 +30,19 @@ PACKET_RX, PACKET_TX = 0, 1
 # received the last command -- the one real acknowledgement this protocol gives.
 DATA_TYPE_ACK = 1
 
+# mdrHeadphonesSetPairedDevice commands.
+PAIRED_CONNECT, PAIRED_DISCONNECT, PAIRED_PLAYBACK, PAIRED_UNPAIR = 1, 2, 3, 4
+PAIRED_COMMAND = {"connect": PAIRED_CONNECT, "disconnect": PAIRED_DISCONNECT,
+                  "playback": PAIRED_PLAYBACK, "unpair": PAIRED_UNPAIR}
+
+# The device exposes a short list of named on/off settings. On the WH-1000XM5
+# that is the touch panel and multipoint; the names come back as symbols, not
+# prose, so they are mapped here rather than shown raw.
+GENERAL_SETTING_NAMES = {
+    "TOUCH_PANEL_SETTING": "touch_panel",
+    "MULTIPOINT_SETTING": "multipoint",
+}
+
 # Asking beats trying. A write to an unsupported endpoint is staged, committed
 # and silently dropped -- the library only puts it on the wire if the device
 # advertised support -- so an unsupported control looks exactly like a working
@@ -155,6 +168,33 @@ class Listening(C.Structure):
 PACKET_CALLBACK = C.CFUNCTYPE(None, C.c_void_p, C.c_uint32, C.POINTER(C.c_ubyte), C.c_int)
 
 
+class GeneralSettingInfo(C.Structure):
+    _fields_ = [("index", C.c_uint32), ("type", C.c_uint32), ("writable", C.c_uint32)]
+
+
+class GeneralSetting(C.Structure):
+    _fields_ = [("index", C.c_uint32), ("boolean_value", C.c_uint32)]
+
+
+class PairedDevice(C.Structure):
+    # mdr-c/Headphones.h. `connected` is this device's own view of who it is
+    # talking to, which is the only way to see the phone from here.
+    _fields_ = [
+        ("connected", C.c_uint32),
+        ("playback_device", C.c_uint32),
+        ("mac", C.c_char * 18),
+        ("name", C.c_char * 128),
+    ]
+
+
+class PairedDeviceAction(C.Structure):
+    _fields_ = [
+        ("command", C.c_uint32),
+        ("device_id", C.c_char_p),
+        ("device_id_size", C.c_uint32),
+    ]
+
+
 class MDRError(RuntimeError):
     pass
 
@@ -216,6 +256,18 @@ class Library:
                                C.POINTER(u32))
         self.set_packet_cb = sig(self.mdr, "mdrHeadphonesSetPacketCallback", None, p,
                                  PACKET_CALLBACK, p)
+        self.get_setting_info = sig(self.mdr, "mdrHeadphonesGetGeneralSettingInfo", u32, p,
+                                    C.POINTER(GeneralSettingInfo), C.POINTER(u32))
+        self.get_setting = sig(self.mdr, "mdrHeadphonesGetGeneralSetting", u32, p, u32,
+                               C.POINTER(GeneralSetting))
+        self.set_setting = sig(self.mdr, "mdrHeadphonesSetGeneralSetting", u32, p,
+                               C.POINTER(GeneralSetting))
+        self.get_text = sig(self.mdr, "mdrHeadphonesGetText", u32, p, u32, u32,
+                            C.c_char_p, C.POINTER(u32))
+        self.get_paired = sig(self.mdr, "mdrHeadphonesGetPairedDevices", u32, p,
+                              C.POINTER(PairedDevice), C.POINTER(u32))
+        self.set_paired = sig(self.mdr, "mdrHeadphonesSetPairedDevice", u32, p,
+                              C.POINTER(PairedDeviceAction))
         self._result_string = sig(self.mdr, "mdrResultString", C.c_char_p, u32)
 
     def result(self, code):
@@ -363,6 +415,75 @@ class Headphones:
                 pass                      # never let an exception cross the ABI
         self._packet_cb = PACKET_CALLBACK(trampoline)
         self.lib.set_packet_cb(self._hp, self._packet_cb, None)
+
+    TEXT_GENERAL_SETTING_SUBJECT = 11
+
+    def text(self, kind, index, size=256):
+        buf = C.create_string_buffer(size)
+        n = C.c_uint32(size)
+        if self.lib.get_text(self._hp, kind, index, buf, C.byref(n)) != RESULT_OK:
+            return ""
+        return buf.value.decode(errors="replace")
+
+    def general_settings(self, maximum=16):
+        """The device's named on/off settings, keyed by our own short names."""
+        count = C.c_uint32(maximum)
+        buf = (GeneralSettingInfo * maximum)()
+        if self.lib.get_setting_info(self._hp, buf, C.byref(count)) != RESULT_OK:
+            return {}
+        out = {}
+        for info in list(buf)[: count.value]:
+            subject = self.text(self.TEXT_GENERAL_SETTING_SUBJECT, info.index)
+            name = GENERAL_SETTING_NAMES.get(subject)
+            if not name:
+                continue
+            setting = GeneralSetting()
+            if self.lib.get_setting(self._hp, info.index, C.byref(setting)) != RESULT_OK:
+                continue
+            out[name] = {"index": int(info.index),
+                         "value": bool(setting.boolean_value),
+                         "writable": bool(info.writable)}
+        return out
+
+    def set_general_setting(self, index, value, settle=None):
+        setting = GeneralSetting(index=int(index), boolean_value=1 if value else 0)
+        r = self.lib.set_setting(self._hp, C.byref(setting))
+        if r != RESULT_OK:
+            raise MDRError(f"setting write failed: {self.lib.result(r)}")
+        self.lib.hp_commit(self._hp)
+        deadline = time.monotonic() + (self.write_settle if settle is None else settle)
+        while time.monotonic() < deadline:
+            self.pump(20)
+        return value
+
+    def paired_devices(self, maximum=16):
+        count = C.c_uint32(maximum)
+        buf = (PairedDevice * maximum)()
+        r = self.lib.get_paired(self._hp, buf, C.byref(count))
+        if r != RESULT_OK:
+            raise MDRError(f"paired device read failed: {self.lib.result(r)}")
+        return [{"mac": d.mac.decode(errors="replace"),
+                 "name": d.name.decode(errors="replace"),
+                 "connected": bool(d.connected),
+                 "playback": bool(d.playback_device)}
+                for d in list(buf)[: count.value]]
+
+    def paired_device_action(self, command, mac, settle=None):
+        """connect / disconnect / playback / unpair, by MAC."""
+        if isinstance(command, str):
+            if command not in PAIRED_COMMAND:
+                raise ValueError(f"command must be one of {sorted(PAIRED_COMMAND)}")
+            command = PAIRED_COMMAND[command]
+        raw = mac.encode()
+        action = PairedDeviceAction(command=command, device_id=raw, device_id_size=len(raw))
+        r = self.lib.set_paired(self._hp, C.byref(action))
+        if r != RESULT_OK:
+            raise MDRError(f"paired device action failed: {self.lib.result(r)}")
+        self.lib.hp_commit(self._hp)
+        deadline = time.monotonic() + (self.write_settle if settle is None else settle)
+        while time.monotonic() < deadline:
+            self.pump(20)
+        return True
 
     def feature(self, name):
         """'available', 'unavailable' or 'unknown'."""

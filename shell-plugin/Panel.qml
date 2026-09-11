@@ -117,6 +117,10 @@ Panel {
   readonly property string wearingPower: state.wearing_power !== undefined ? String(state.wearing_power) : ""
   readonly property bool autoPause: eff("auto_pause", false) === true
   readonly property string powerOff: String(eff("power_off", ""))
+  readonly property bool multipoint: eff("multipoint", false) === true
+  readonly property var devices: state.devices !== undefined ? state.devices : []
+  readonly property var othersConnected: state.others_connected !== undefined ? state.others_connected : []
+  property bool devicesExpanded: false
 
   // Only show what this device actually advertises. A control for something it
   // does not support is worse than no control: the write is accepted, committed
@@ -325,7 +329,8 @@ Panel {
     if (session) send(["power-off", powerOffValue(label)], "power_off", powerOffValue(label))
   }
   function setAutoPause(on) { if (session) send(["auto-pause", on ? "on" : "off"], "auto_pause", on) }
-  function powerOff() { if (session) send(["shutdown"]) }
+  function setMultipoint(on) { if (session) send(["multipoint", on ? "on" : "off"], "multipoint", on) }
+  function deviceAction(action, mac) { if (session) send(["device", action, mac]) }
 
   function startDaemon() {
     daemonCmd.command = ["systemctl", "--user", "start", "mdrctld"]
@@ -771,15 +776,107 @@ Panel {
             onClicked: root.setAutoPause(!root.autoPause)
           }
 
-          Button {
-            text: "Switch off"
-            bordered: true
-            foreground: root.foreground
-            background: root.background
-            accent: root.accent
-            fontFamily: root.fontFamily
-            tooltipText: "The link goes with them, so the panel loses its session"
-            onClicked: root.powerOff()
+        }
+
+        // ---- devices -------------------------------------------------------
+        // The headset's own view of who it is talking to. BlueZ cannot see
+        // this: it knows about our link and nothing about the headset's
+        // others, so the phone is invisible from that side.
+        Column {
+          width: parent.width
+          spacing: Style.space(8)
+          visible: root.session && root.devices.length > 0
+
+          Item {
+            width: parent.width
+            implicitHeight: Math.max(devHeader.implicitHeight, devValue.implicitHeight)
+
+            Text {
+              id: devHeader
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              text: (root.devicesExpanded ? "\u25be  " : "\u25b8  ") + "Devices"
+              color: devMouse.containsMouse ? root.foreground : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+
+            Text {
+              id: devValue
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.othersConnected.length === 0
+                ? "this PC only"
+                : "also " + root.othersConnected.join(", ")
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              elide: Text.ElideRight
+              width: Math.min(implicitWidth, parent.width - devHeader.implicitWidth - Style.space(12))
+              horizontalAlignment: Text.AlignRight
+            }
+
+            MouseArea {
+              id: devMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.devicesExpanded = !root.devicesExpanded
+            }
+          }
+
+          Column {
+            width: parent.width
+            visible: root.devicesExpanded
+            spacing: Style.space(6)
+
+            Toggle {
+              width: parent.width
+              label: "Multipoint"
+              description: "Stay connected to two devices at once"
+              checked: root.multipoint
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.setMultipoint(!root.multipoint)
+            }
+
+            Repeater {
+              model: root.devices
+
+              Item {
+                required property var modelData
+                width: parent.width
+                implicitHeight: Math.max(devName.implicitHeight, devButton.implicitHeight)
+
+                Text {
+                  id: devName
+                  anchors.left: parent.left
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: parent.width - devButton.width - Style.space(12)
+                  text: (modelData.name && modelData.name !== "" ? modelData.name : modelData.mac)
+                        + (modelData.playback ? "  \u00b7  playing" : "")
+                  color: modelData.connected ? root.foreground : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  elide: Text.ElideRight
+                }
+
+                Button {
+                  id: devButton
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: modelData.connected ? "Disconnect" : "Connect"
+                  bordered: true
+                  fontSize: Style.font.bodySmall
+                  foreground: root.foreground
+                  background: root.background
+                  accent: root.accent
+                  fontFamily: root.fontFamily
+                  onClicked: root.deviceAction(modelData.connected ? "disconnect" : "connect",
+                                               modelData.mac)
+                }
+              }
+            }
           }
         }
 

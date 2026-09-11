@@ -232,6 +232,23 @@ this; BlueZ is the one that knows. The daemon now asks it every few seconds
 while it believes it has a session, and drops the session when the device goes
 away.
 
+### Seeing the headset's other connections
+
+`mdrHeadphonesGetPairedDevices` returns what the headset itself is talking to,
+which is the only way to see the phone: BlueZ knows about our link and nothing
+about the headset's others. `mdrHeadphonesSetPairedDevice` connects,
+disconnects, selects the playback device, or unpairs one, by MAC.
+
+`mdrHeadphonesGetGeneralSettingInfo` lists the device's named on/off settings,
+with `mdrHeadphonesGetText` giving each a name. On the WH-1000XM5 there are
+exactly two, both writable: `TOUCH_PANEL_SETTING` and `MULTIPOINT_SETTING`.
+The touch panel one matters more than it looks -- taking the headphones off
+brushes the panel and sends a stray track-skip.
+
+One trap when listing: the headset counts *this machine* among its connections,
+so the local adapter's own address has to be excluded or the PC shows up as
+another device.
+
 ### One control channel across every paired device
 
 The headset grants one MDR session, and that is shared with whatever else it is
