@@ -212,6 +212,11 @@ class Daemon:
     # -- state -----------------------------------------------------------
 
     LIVENESS_EVERY = 3.0
+    # How long the loop sleeps per turn: short enough that a frame from the
+    # headset is picked up imperceptibly fast, long enough to cost nothing.
+    IDLE_WAIT = 0.02
+    # Nothing to pump while there is no session; just do not hammer connect().
+    RETRY_WAIT = 0.25
 
     def refresh(self):
         # Having a session object is not the same as having a link. The library
@@ -611,13 +616,19 @@ class Daemon:
 
             if self.hp:
                 try:
-                    self.hp.pump(20)
+                    self.hp.pump(0)
                 except Exception as e:
                     self.drop(str(e))
-            else:
-                time.sleep(0.25)
 
-            ready, _, _ = select.select([srv] + self.subscribers, [], [], 0)
+            # The wait happens here, never inside pump(). mdrConnectionPoll
+            # asks the socket for POLLIN|POLLOUT, and an idle socket is always
+            # writable, so its timeout never elapses -- passing one just spun
+            # this loop on a full core for as long as the headset was
+            # connected. select() on the control socket does the waiting
+            # instead, and wakes the moment a command lands, so nothing here
+            # answers any slower than it did before.
+            wait = self.IDLE_WAIT if self.hp else self.RETRY_WAIT
+            ready, _, _ = select.select([srv] + self.subscribers, [], [], wait)
             dirty = False
             for sock in ready:
                 if sock is srv:
