@@ -160,7 +160,12 @@ Panel {
     return "WH-1000XM5 — " + modeName + (battery >= 0 ? ", " + battery + "%" : "")
   }
 
-  function open() { root.controller.show(); stateFile.reload() }
+  function open() {
+    snapshotTaken = false          // each opening gets its own undo point
+    root.controller.show()
+    stateFile.reload()
+    syncLocal()
+  }
   function close() { root.controller.hide() }
   function toggle() { opened ? close() : open() }
 
@@ -210,14 +215,80 @@ Panel {
   // Band frequencies for the five-band layout this family uses.
   readonly property var bandLabels: ["400", "1k", "2.5k", "6.3k", "16k"]
 
-  function setBand(index, value) {
-    if (!session || index < 0 || index >= eqBands.length) return
-    var next = []
-    for (var i = 0; i < eqBands.length; i++)
-      next.push(i === index ? Math.round(value) : Number(eqBands[i]))
-    run(["bands", next.join(",")])
+  property bool eqExpanded: false
+
+  // The sliders read this, not the daemon's copy. Binding a slider straight to
+  // polled state means that between releasing the knob and the daemon noticing,
+  // the old value comes back and throws the knob somewhere else -- which is the
+  // "jumps to a random number". So hold what the user chose, and take the
+  // device's word again only once nothing is in flight.
+  property var localBands: []
+  property int localClearBass: 0
+  property int inFlight: 0
+  property var queued: null
+
+  // What the equaliser looked like when the panel was opened, so a slip can be
+  // undone. Captured on open rather than on first edit: by the time you know
+  // you want it back, you have already moved something.
+  property var snapshotBands: []
+  property int snapshotClearBass: 0
+  property bool snapshotTaken: false
+  readonly property bool eqChanged: {
+    if (!snapshotTaken || snapshotBands.length !== localBands.length) return false
+    if (snapshotClearBass !== localClearBass) return true
+    for (var i = 0; i < localBands.length; i++)
+      if (Number(snapshotBands[i]) !== Number(localBands[i])) return true
+    return false
   }
-  function setClearBass(v) { if (session) run(["clear-bass", String(Math.round(v))]) }
+
+  function syncLocal() {
+    if (inFlight > 0) return          // our own write is still on its way
+    localBands = eqBands.slice()
+    localClearBass = clearBass
+    if (!snapshotTaken && eqBands.length > 0) {
+      snapshotBands = eqBands.slice()
+      snapshotClearBass = clearBass
+      snapshotTaken = true
+    }
+  }
+
+  onEqBandsChanged: syncLocal()
+  onClearBassChanged: syncLocal()
+
+  function sendEq() {
+    if (!session || localBands.length === 0) return
+    var args = ["bands", localBands.join(",")]
+    if (cmd.running) { queued = args; return }
+    inFlight++
+    cmd.command = [root.mdrctl].concat(args)
+    cmd.running = true
+  }
+
+  function sendClearBass(v) {
+    if (!session) return
+    var args = ["clear-bass", String(Math.round(v))]
+    if (cmd.running) { queued = args; return }
+    inFlight++
+    cmd.command = [root.mdrctl].concat(args)
+    cmd.running = true
+  }
+
+  function undoEq() {
+    if (!snapshotTaken) return
+    localBands = snapshotBands.slice()
+    localClearBass = snapshotClearBass
+    sendEq()
+    sendClearBass(snapshotClearBass)
+  }
+
+  function setBand(index, value) {
+    if (!session || index < 0 || index >= localBands.length) return
+    var next = localBands.slice()
+    next[index] = Math.round(value)
+    localBands = next
+    sendEq()
+  }
+  function setClearBass(v) { localClearBass = Math.round(v); sendClearBass(v) }
   function setDsee(on) { if (session) run(["dsee", on ? "on" : "off"]) }
   function setPriority(p) { if (session && p !== audioPriority) run(["priority", p]) }
   function setPowerOff(label) { if (session) run(["power-off", powerOffValue(label)]) }
@@ -261,7 +332,17 @@ Panel {
 
   Process {
     id: cmd
-    onExited: stateFile.reload()
+    onExited: {
+      if (root.inFlight > 0) root.inFlight--
+      stateFile.reload()
+      if (root.queued) {
+        var next = root.queued
+        root.queued = null
+        root.inFlight++
+        cmd.command = [root.mdrctl].concat(next)
+        cmd.running = true
+      }
+    }
   }
 
   Process {
@@ -399,6 +480,7 @@ Panel {
             tickCount: root.ambientMax + 1
             value: root.ambientLevel
             onReleased: function(v) { root.setAmbient(v) }
+            WheelBlocker { anchors.fill: parent; scrollTarget: flick }
           }
         }
 
@@ -415,112 +497,146 @@ Panel {
             fontFamily: root.fontFamily
           }
 
-          // Preset is read-only on purpose. Writing one is accepted, sent, and
-          // ignored by this device -- tested twice, with two different presets,
-          // each checked from a fresh session. The bands below are the EQ
-          // control that actually works.
+          // The equaliser is the only thing here with enough controls to need
+          // scrolling, and scrolling past a slider used to move it. Folded away
+          // by default, the panel fits and there is nothing to scroll over.
+          //
+          // Preset is shown, not offered: writing one is accepted, sent, and
+          // ignored by this device.
           Item {
             width: parent.width
-            implicitHeight: presetLabel.implicitHeight
+            implicitHeight: Math.max(eqHeader.implicitHeight, eqValue.implicitHeight)
 
             Text {
-              id: presetLabel
+              id: eqHeader
               anchors.left: parent.left
-              text: "Preset"
-              color: root.dim
+              anchors.verticalCenter: parent.verticalCenter
+              text: (root.eqExpanded ? "\u25be  " : "\u25b8  ") + "Equaliser"
+              color: eqMouse.containsMouse ? root.foreground : root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
             }
 
             Text {
+              id: eqValue
               anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
               text: root.eqPreset
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
             }
+
+            MouseArea {
+              id: eqMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.eqExpanded = !root.eqExpanded
+            }
           }
 
-          Repeater {
-            model: root.eqBands.length
+          Column {
+            width: parent.width
+            visible: root.eqExpanded
+            spacing: Style.space(6)
 
-            Item {
-              required property int index
-              width: bandColumn.width
-              implicitHeight: bandRow.implicitHeight + bandSlider.implicitHeight + Style.space(2)
+            Repeater {
+              model: root.localBands.length
 
               Item {
-                id: bandRow
-                width: parent.width
-                implicitHeight: bandName.implicitHeight
+                id: bandItem
+                required property int index
+                width: bandColumn.width
+                implicitHeight: bandRow.implicitHeight + bandSlider.implicitHeight + Style.space(2)
 
-                Text {
-                  id: bandName
-                  anchors.left: parent.left
-                  text: root.bandLabels[parent.parent.index] + " Hz"
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                }
+                Item {
+                  id: bandRow
+                  width: parent.width
+                  implicitHeight: bandName.implicitHeight
 
-                Text {
-                  anchors.right: parent.right
-                  text: {
-                    var v = Number(root.eqBands[bandName.parent.parent.index])
-                    return (v > 0 ? "+" : "") + v
+                  Text {
+                    id: bandName
+                    anchors.left: parent.left
+                    text: root.bandLabels[bandItem.index] + " Hz"
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
                   }
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
+
+                  Text {
+                    anchors.right: parent.right
+                    text: {
+                      var v = Number(root.localBands[bandItem.index])
+                      return (v > 0 ? "+" : "") + v
+                    }
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                  }
+                }
+
+                PanelSlider {
+                  id: bandSlider
+                  width: parent.width
+                  anchors.top: bandRow.bottom
+                  bar: root.bar
+                  minimum: -root.eqBandLimit
+                  maximum: root.eqBandLimit
+                  step: 1
+                  integer: true
+                  value: Number(root.localBands[bandItem.index])
+                  onReleased: function(v) { root.setBand(bandItem.index, v) }
+                  WheelBlocker { anchors.fill: parent; scrollTarget: flick }
                 }
               }
+            }
 
-              PanelSlider {
-                id: bandSlider
-                width: parent.width
-                anchors.top: bandRow.bottom
-                bar: root.bar
-                minimum: -root.eqBandLimit
-                maximum: root.eqBandLimit
-                step: 1
-                integer: true
-                value: Number(root.eqBands[parent.index])
-                onReleased: function(v) { root.setBand(bandSlider.parent.index, v) }
+            Item {
+              width: parent.width
+              implicitHeight: bassLabel.implicitHeight
+
+              Text {
+                id: bassLabel
+                anchors.left: parent.left
+                text: "Clear bass"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              Text {
+                anchors.right: parent.right
+                text: (root.localClearBass > 0 ? "+" : "") + root.localClearBass
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
               }
             }
-          }
 
-          Item {
-            width: parent.width
-            implicitHeight: bassLabel.implicitHeight
-
-            Text {
-              id: bassLabel
-              anchors.left: parent.left
-              text: "Clear bass"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
+            PanelSlider {
+              width: parent.width
+              bar: root.bar
+              minimum: -root.eqBandLimit
+              maximum: root.eqBandLimit
+              step: 1
+              integer: true
+              value: root.localClearBass
+              onReleased: function(v) { root.setClearBass(v) }
+              WheelBlocker { anchors.fill: parent; scrollTarget: flick }
             }
 
-            Text {
-              anchors.right: parent.right
-              text: (root.clearBass > 0 ? "+" : "") + root.clearBass
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
+            Button {
+              text: "Undo"
+              visible: root.eqChanged
+              bordered: true
+              foreground: root.foreground
+              background: root.background
+              accent: root.accent
+              fontFamily: root.fontFamily
+              tooltipText: "Back to the equaliser this panel opened with"
+              onClicked: root.undoEq()
             }
-          }
-
-          PanelSlider {
-            width: parent.width
-            bar: root.bar
-            minimum: -root.eqBandLimit
-            maximum: root.eqBandLimit
-            step: 1
-            integer: true
-            value: root.clearBass
-            onReleased: function(v) { root.setClearBass(v) }
           }
 
           Toggle {
@@ -673,6 +789,22 @@ Panel {
         }
       }
       }
+    }
+  }
+
+  // Sits over a slider and takes the wheel away from it, scrolling the list
+  // instead. Without this, scrolling the panel commits every slider it passes.
+  component WheelBlocker: MouseArea {
+    // The Flickable to scroll instead, passed in: an inline component resolves
+    // ids where it is declared, not where it is used, so it cannot reach one.
+    property var scrollTarget: null
+    acceptedButtons: Qt.NoButton
+    onWheel: function(wheel) {
+      wheel.accepted = true
+      var f = scrollTarget
+      if (!f || !f.interactive) return
+      f.contentY = Math.max(0, Math.min(f.contentHeight - f.height,
+                                        f.contentY - wheel.angleDelta.y))
     }
   }
 
