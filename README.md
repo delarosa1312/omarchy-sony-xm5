@@ -89,10 +89,14 @@ Writing **reaches the device and is audible**, confirmed by ear:
 So the earlier "maybe it applies late" theory is dead, and so is "it reverts
 when the session drops". The asymmetry is real.
 
-Note the echo is slow even when it works: after a successful write the device
-kept reporting the old mode for several seconds before updating. Any confirm
-loop needs to be patient, and the daemon should stream state rather than block
-on a write.
+**Reading during a session is reliable** — proven with `tools/watch.py` by
+pressing the button on the headphones repeatedly: every single change was
+picked up, with roughly one to three seconds of latency. So a stale read does
+not explain the failed write; the write really is being rejected while
+reporting success.
+
+The same latency applies to our own writes, so a confirm loop must be patient
+and the daemon should stream state rather than block on each write.
 
 Recovery if a device is left in the wrong mode: the button on the headphones
 cycles modes, per `button_mode`.
