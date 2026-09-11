@@ -23,7 +23,7 @@ BUILD = os.environ.get(
 lib = mdr.Library(BUILD)
 for uuid in CANDIDATES:
     try:
-        with mdr.Headphones(lib, MAC, uuid=uuid, link_timeout=4.0) if False else mdr.Headphones(lib, MAC, uuid=uuid) as hp:
+        with mdr.Headphones(lib, MAC, uuid=uuid):
             print(f"{uuid}  WORKS")
             break
     except mdr.MDRError as e:

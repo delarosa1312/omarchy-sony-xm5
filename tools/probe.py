@@ -14,4 +14,4 @@ lib = mdr.Library(BUILD)
 with mdr.Headphones(lib, MAC) as hp:
     print(f"connected to {MAC}, handshake complete")
     for b in hp.get_batteries():
-        print(f"  battery part={b.part} level={b.level_percent}% charging={bool(b.charging)}")
+        print("  " + mdr.describe(b))

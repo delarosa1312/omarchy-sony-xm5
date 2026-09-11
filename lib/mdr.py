@@ -24,10 +24,15 @@ RESULT_INPROGRESS = 1
 
 XM5_SERVICE_UUID = "956C7B26-D49A-4BA8-B03F-B17D393CB6E2"
 
+# mdr-c/Headphones.h
+BATTERY_PART = {0: "main", 1: "left", 2: "right", 3: "case"}
+# Not a boolean: 1 means *not* charging. Reading it as truthy reports every
+# idle headphone as charging.
+CHARGING = {0: "unknown", 1: "no", 2: "yes", 3: "complete"}
+
 
 class Battery(C.Structure):
-    # NOTE: layout still unverified against mdr-c/Headphones.h. Readings look
-    # wrong (0% while charging), so do not trust these fields yet.
+    # Layout verified against mdr-c/Headphones.h.
     _fields_ = [
         ("part", C.c_uint32),
         ("present", C.c_uint32),
@@ -150,3 +155,10 @@ class Headphones:
         if self._handle:
             self.lib.conn_destroy(self._handle)
         self._handle = self._conn = None
+
+
+def describe(battery):
+    """Human-readable battery line, decoding the enums correctly."""
+    part = BATTERY_PART.get(battery.part, f"part {battery.part}")
+    state = CHARGING.get(battery.charging, f"state {battery.charging}")
+    return f"{part}: {battery.level_percent}% (charging: {state})"
