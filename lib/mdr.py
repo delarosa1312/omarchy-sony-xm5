@@ -416,32 +416,55 @@ class Headphones:
         eq.dsee_enabled = 1 if enabled else 0
         return self.set_equalizer(eq)
 
-    def write_eq(self, bands=None, clear_bass=None):
+    def write_eq(self, bands=None, clear_bass=None, settle=None):
         """Write bands and clear bass together, because the device does.
 
         They share one message: clear bass is the first element of the band
-        array on the wire. Two consequences, both learned the hard way.
+        array on the wire. Three things follow, each learned the hard way.
 
         A clear-bass-only change is staged, committed locally and never sent --
-        the library only builds that message when bands are staged too. And a
-        bands-only change sends whatever clear bass was last staged, which is
-        not necessarily what the device currently has, so clear bass drifts by
-        a step every time you touch the bands.
+        the library only builds that message when bands are staged too. A
+        bands-only change sends whatever clear bass was last staged, so clear
+        bass drifts a step every time you touch the bands. And committing
+        between the two stages flushes the message with only half the change
+        in it: the frame goes out carrying the *old* bands, which looks exactly
+        like the device ignoring the write.
 
-        Restating both on every write is what makes either of them stick.
+        So stage both, then commit once.
         """
-        current_bands = self.get_equalizer_bands()
+        values = self.get_equalizer_bands() if bands is None else [int(v) for v in bands]
+        limit = self.BAND_LIMITS.get(len(values))
+        if limit is None:
+            raise ValueError("the device takes exactly 5 or 10 bands")
+        if any(abs(v) > limit for v in values):
+            raise ValueError(f"{len(values)} bands run from -{limit} to +{limit}")
+
         eq = self._eq_for_write()
         if clear_bass is not None:
             clear_bass = int(clear_bass)
             if not -10 <= clear_bass <= 10:
                 raise ValueError("clear bass runs from -10 to +10")
             eq.clear_bass = clear_bass
-        self.set_equalizer(eq, settle=0)
-        return self.set_equalizer_bands(current_bands if bands is None else bands)
+
+        r = self.lib.set_eq(self._hp, C.byref(eq))
+        if r != RESULT_OK:
+            raise MDRError(f"equalizer write failed: {self.lib.result(r)}")
+        buf = (C.c_int8 * len(values))(*values)
+        r = self.lib.set_eq_bands(self._hp, buf, len(values))
+        if r != RESULT_OK:
+            raise MDRError(f"equalizer band write failed: {self.lib.result(r)}")
+
+        self.lib.hp_commit(self._hp)
+        deadline = time.monotonic() + (self.write_settle if settle is None else settle)
+        while time.monotonic() < deadline:
+            self.pump(20)
+        return values
 
     def set_clear_bass(self, level):
         return self.write_eq(clear_bass=level)
+
+    def set_bands(self, values):
+        return self.write_eq(bands=values)
 
     def get_equalizer_bands(self, maximum=16):
         count = C.c_uint32(maximum)
