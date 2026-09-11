@@ -70,9 +70,73 @@ Panel {
   readonly property bool focusOnVoice: state.focus_on_voice === true
   readonly property string errorText: state.error && state.error !== "null" ? String(state.error) : ""
 
+  readonly property string eqPreset: state.eq_preset !== undefined ? String(state.eq_preset) : ""
+  readonly property var eqBands: state.eq_bands !== undefined ? state.eq_bands : []
+  readonly property int eqBandLimit: state.eq_band_limit !== undefined ? Number(state.eq_band_limit) : 10
+  readonly property int clearBass: state.eq_clear_bass !== undefined ? Number(state.eq_clear_bass) : 0
+  readonly property bool dsee: state.dsee === true
+  readonly property string dseeType: state.dsee_type !== undefined ? String(state.dsee_type) : ""
+  readonly property string audioPriority: state.audio_priority !== undefined ? String(state.audio_priority) : ""
+  readonly property string listening: state.listening !== undefined ? String(state.listening) : ""
+  readonly property string roomSize: state.room_size !== undefined ? String(state.room_size) : ""
+  readonly property int autoPowerOff: state.auto_power_off !== undefined ? Number(state.auto_power_off) : -1
+  readonly property string wearingPower: state.wearing_power !== undefined ? String(state.wearing_power) : ""
+  readonly property bool autoPause: state.auto_pause === true
+  readonly property string powerOff: state.power_off !== undefined ? String(state.power_off) : ""
+
+  // Only show what this device actually advertises. A control for something it
+  // does not support is worse than no control: the write is accepted, committed
+  // locally and never sent, so the button looks like it worked.
+  readonly property var features: state.features !== undefined ? state.features : ({})
+  function has(name) { return features[name] === "available" }
+
+  // Fields we have written but the headphones have not echoed back. They are
+  // almost certainly in effect; this API simply does not acknowledge a
+  // session's own writes.
+  readonly property var unconfirmed: state.unconfirmed !== undefined ? state.unconfirmed : []
+  readonly property string unconfirmedText: {
+    if (unconfirmed.length === 0) return ""
+    var names = { mode: "noise mode", ambient_level: "ambient level",
+                  eq_preset: "equaliser", eq_bands: "bands",
+                  eq_clear_bass: "clear bass", dsee: "DSEE",
+                  audio_priority: "connection", listening: "listening mode",
+                  auto_power_off: "auto power off", wearing_power: "pause when removed",
+                  auto_pause: "auto pause" }
+    var out = []
+    for (var i = 0; i < unconfirmed.length; i++)
+      out.push(names[unconfirmed[i]] || unconfirmed[i])
+    return "Set, but not echoed back yet: " + out.join(", ") + "."
+  }
+
+  readonly property var eqPresets: [
+    "off", "rock", "pop", "jazz", "dance", "edm", "r&b/hip-hop", "acoustic",
+    "bright", "excited", "mellow", "relaxed", "vocal", "treble", "bass",
+    "speech", "heavy", "clear", "hard", "soft", "custom",
+    "user-1", "user-2", "user-3", "user-4", "user-5"
+  ]
+
+  // Wearing detection and the timer are alternatives, not separate settings.
+  readonly property var powerOffChoices: [
+    "when removed", "never", "5 min", "15 min", "30 min", "60 min", "180 min"
+  ]
+  function powerOffLabel(value) {
+    if (value === "when-removed") return "when removed"
+    if (value === "never" || value === "") return "never"
+    return value + " min"
+  }
+  function powerOffValue(label) {
+    if (label === "when removed") return "when-removed"
+    if (label === "never") return "never"
+    return String(parseInt(label))
+  }
+
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
+  readonly property color background: bar ? bar.background : Color.background
+  // The bar has no accent of its own; the theme's is the one every other
+  // panel's controls use.
+  readonly property color accent: Color.accent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property string glyph: "󰋋"
@@ -143,6 +207,23 @@ Panel {
     setAmbient(ambientLevel + step)
   }
 
+  // Band frequencies for the five-band layout this family uses.
+  readonly property var bandLabels: ["400", "1k", "2.5k", "6.3k", "16k"]
+
+  function setBand(index, value) {
+    if (!session || index < 0 || index >= eqBands.length) return
+    var next = []
+    for (var i = 0; i < eqBands.length; i++)
+      next.push(i === index ? Math.round(value) : Number(eqBands[i]))
+    run(["bands", next.join(",")])
+  }
+  function setClearBass(v) { if (session) run(["clear-bass", String(Math.round(v))]) }
+  function setDsee(on) { if (session) run(["dsee", on ? "on" : "off"]) }
+  function setPriority(p) { if (session && p !== audioPriority) run(["priority", p]) }
+  function setPowerOff(label) { if (session) run(["power-off", powerOffValue(label)]) }
+  function setAutoPause(on) { if (session) run(["auto-pause", on ? "on" : "off"]) }
+  function powerOff() { if (session) run(["shutdown"]) }
+
   function startDaemon() {
     daemonCmd.command = ["systemctl", "--user", "start", "mdrctld"]
     daemonCmd.running = true
@@ -195,8 +276,8 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(330))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight)
+    contentWidth: panel.fittedContentWidth(Style.space(360))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(620))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -211,9 +292,20 @@ Panel {
         else if (k === "c") root.cycleMode()
       }
 
+      Flickable {
+        id: flick
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: column.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
+        interactive: contentHeight > height
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
       Column {
         id: column
-        width: parent.width
+        width: flick.width
         spacing: Style.space(14)
 
         PanelHero {
@@ -256,8 +348,8 @@ Panel {
             width: parent.width
             enabled: root.session
             foreground: root.foreground
-            background: root.bar ? root.bar.background : Color.background
-            accent: root.bar ? root.bar.accent : Color.accent
+            background: root.background
+            accent: root.accent
             fontFamily: root.fontFamily
             options: [
               { value: "cancelling", label: "Cancelling", tooltip: "Block outside sound  (n)" },
@@ -268,18 +360,6 @@ Panel {
             onChanged: function(v) { root.setMode(v) }
           }
 
-          // The device does not tell a session about its own writes, so a mode
-          // we set reads back as the old one for a while. Saying so is better
-          // than a widget that looks broken.
-          Text {
-            visible: root.session && !root.modeConfirmed
-            width: parent.width
-            text: "Set, but not yet echoed back by the headphones."
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
-          }
         }
 
         // ---- ambient level ----------------------------------------------
@@ -320,6 +400,224 @@ Panel {
             value: root.ambientLevel
             onReleased: function(v) { root.setAmbient(v) }
           }
+        }
+
+        // ---- sound --------------------------------------------------------
+        Column {
+          id: bandColumn
+          width: parent.width
+          spacing: Style.space(8)
+          visible: root.session && root.eqPreset !== "" && root.has("equalizer")
+
+          PanelSectionHeader {
+            text: "SOUND"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          // Preset is read-only on purpose. Writing one is accepted, sent, and
+          // ignored by this device -- tested twice, with two different presets,
+          // each checked from a fresh session. The bands below are the EQ
+          // control that actually works.
+          Item {
+            width: parent.width
+            implicitHeight: presetLabel.implicitHeight
+
+            Text {
+              id: presetLabel
+              anchors.left: parent.left
+              text: "Preset"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+
+            Text {
+              anchors.right: parent.right
+              text: root.eqPreset
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+          }
+
+          Repeater {
+            model: root.eqBands.length
+
+            Item {
+              required property int index
+              width: bandColumn.width
+              implicitHeight: bandRow.implicitHeight + bandSlider.implicitHeight + Style.space(2)
+
+              Item {
+                id: bandRow
+                width: parent.width
+                implicitHeight: bandName.implicitHeight
+
+                Text {
+                  id: bandName
+                  anchors.left: parent.left
+                  text: root.bandLabels[parent.parent.index] + " Hz"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+
+                Text {
+                  anchors.right: parent.right
+                  text: {
+                    var v = Number(root.eqBands[bandName.parent.parent.index])
+                    return (v > 0 ? "+" : "") + v
+                  }
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+              }
+
+              PanelSlider {
+                id: bandSlider
+                width: parent.width
+                anchors.top: bandRow.bottom
+                bar: root.bar
+                minimum: -root.eqBandLimit
+                maximum: root.eqBandLimit
+                step: 1
+                integer: true
+                value: Number(root.eqBands[parent.index])
+                onReleased: function(v) { root.setBand(bandSlider.parent.index, v) }
+              }
+            }
+          }
+
+          Item {
+            width: parent.width
+            implicitHeight: bassLabel.implicitHeight
+
+            Text {
+              id: bassLabel
+              anchors.left: parent.left
+              text: "Clear bass"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+
+            Text {
+              anchors.right: parent.right
+              text: (root.clearBass > 0 ? "+" : "") + root.clearBass
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+          }
+
+          PanelSlider {
+            width: parent.width
+            bar: root.bar
+            minimum: -root.eqBandLimit
+            maximum: root.eqBandLimit
+            step: 1
+            integer: true
+            value: root.clearBass
+            onReleased: function(v) { root.setClearBass(v) }
+          }
+
+          Toggle {
+            width: parent.width
+            label: "DSEE"
+            description: root.dseeType !== "" && root.dsee
+              ? "Upscaling compressed audio (" + root.dseeType + ")"
+              : "Upscale compressed audio"
+            visible: root.has("dsee")
+            checked: root.dsee
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.setDsee(!root.dsee)
+          }
+        }
+
+        // ---- connection ----------------------------------------------------
+        Column {
+          width: parent.width
+          spacing: Style.space(8)
+          visible: root.session && root.audioPriority !== "" && root.has("connection_mode")
+
+          PanelSectionHeader {
+            text: "CONNECTION"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          ButtonGroup {
+            width: parent.width
+            foreground: root.foreground
+            background: root.background
+            accent: root.accent
+            fontFamily: root.fontFamily
+            options: [
+              { value: "quality", label: "Quality", tooltip: "Ask for LDAC's higher bitrate" },
+              { value: "stability", label: "Stability", tooltip: "Drop the bitrate to keep the link" }
+            ]
+            value: root.audioPriority
+            onChanged: function(v) { root.setPriority(v) }
+          }
+        }
+
+        // ---- power ----------------------------------------------------------
+        Column {
+          width: parent.width
+          spacing: Style.space(8)
+          visible: root.session && root.powerOff !== "" && root.has("auto_power_off")
+
+          PanelSectionHeader {
+            text: "POWER"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          Dropdown {
+            width: parent.width
+            label: "Switch off"
+            options: root.powerOffChoices
+            value: root.powerOffLabel(root.powerOff)
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onChanged: function(v) { root.setPowerOff(v) }
+          }
+
+          Toggle {
+            width: parent.width
+            label: "Auto pause"
+            description: "Follow the player automatically"
+            checked: root.autoPause
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.setAutoPause(!root.autoPause)
+          }
+
+          Button {
+            text: "Switch off"
+            bordered: true
+            foreground: root.foreground
+            background: root.background
+            accent: root.accent
+            fontFamily: root.fontFamily
+            tooltipText: "The link goes with them, so the panel loses its session"
+            onClicked: root.powerOff()
+          }
+        }
+
+        // One line covering every field, because the reason is always the same:
+        // the headphones do not acknowledge a session's own writes.
+        Text {
+          visible: root.unconfirmedText !== ""
+          width: parent.width
+          text: root.unconfirmedText
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
         }
 
         PanelSeparator { foreground: root.foreground }
@@ -367,12 +665,13 @@ Panel {
             text: "Start mdrctld"
             bordered: true
             foreground: root.foreground
-            background: root.bar ? root.bar.background : Color.background
-            accent: root.bar ? root.bar.accent : Color.accent
+            background: root.background
+            accent: root.accent
             fontFamily: root.fontFamily
             onClicked: root.startDaemon()
           }
         }
+      }
       }
     }
   }
@@ -380,7 +679,7 @@ Panel {
   component InfoRow: Item {
     property string label: ""
     property string value: ""
-    width: column.width
+    width: parent ? parent.width : 0
     implicitHeight: visible ? Math.max(labelText.implicitHeight, valueText.implicitHeight) : 0
 
     Text {

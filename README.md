@@ -103,9 +103,13 @@ part that needs the session.
 ## Status
 
 Working: the daemon, the CLI, and the Omarchy bar widget with its popup.
-Verified: battery and mode readout, the stopped-daemon fallback, and recovery
-when the daemon comes back. Not yet verified by ear: the mode buttons and the
-ambient slider in the popup.
+
+Verified: battery and mode readout, the stopped-daemon fallback, recovery when
+the daemon returns, and equalizer band and clear-bass writes (by reconnect).
+Confirmed earlier by ear: noise-mode writes.
+
+Unverified: the ambient slider, connection mode, auto power off, auto pause and
+shutdown. Each needs one reconnect test.
 
 Reading works. `./tools/probe.py` reports the real battery level, and
 `./tools/dump.py` returns data from every endpoint the device supports.
@@ -121,17 +125,69 @@ truthy reports every idle headphone as charging.
 
 ### What the device answers (WH-1000XM5)
 
-| Endpoint | State |
-|---|---|
-| Batteries | works — main, level, charging |
-| NoiseControl | read and write both work; the echo does not (see below) |
-| Equalizer, EqualizerBands | works — 5 bands |
-| Playback, Power, Listening, SpeakToChat | return data |
-| VoiceGuidance, ConnectionMode | single byte each |
-| PairedDevices | works — 6 devices with MAC and name |
-| Model, GeneralSettingInfo | return data |
-| Pairing, SafeListening | empty |
-| AssignableControls | "Not supported" |
+| Endpoint | Read | Write |
+|---|---|---|
+| Batteries | main, level, charging | — |
+| NoiseControl | fully decoded | **works** (confirmed by ear, survives a reconnect) |
+| EqualizerBands + clear bass | 5 bands, -10..+10 | **works** (verified by reconnect) |
+| Equalizer preset | works | **accepted and ignored** |
+| ConnectionMode | quality / stability | untested |
+| Power | auto power off, wearing, auto pause | untested; see the model note below |
+| Listening | returns data | feature probe says *unavailable* on the XM5 |
+| PairedDevices | 6 devices with MAC and name | not wired up |
+| SpeakToChat, VoiceGuidance | return data | not wired up |
+| Model, GeneralSettingInfo | return data | — |
+| Pairing, SafeListening | empty | — |
+| AssignableControls | "Not supported" | — |
+
+### Ask what the device supports, do not just write to it
+
+`mdrHeadphonesGetFeature` answers per feature, and it matters more than it
+looks: a write to an endpoint the device never advertised is validated,
+staged, committed to the library's own copy of the state, and **never put on
+the wire**. It returns success. A later read returns the value you wrote,
+because you are reading the library's copy. Only a fresh session reveals that
+the device never heard about it.
+
+On this WH-1000XM5: `listening_mode`, `adaptive_ambient` and `head_gesture`
+come back *unavailable*; equalizer, DSEE, connection mode, auto power off,
+wearing detection, auto pause, speak-to-chat and shutdown come back
+*available*. The widget hides anything unavailable rather than offering a
+control that cannot work.
+
+### How to tell whether a write actually landed
+
+Reconnect and read. A fresh session reads the device; the session that wrote
+reads its own optimism. This is the only honest test, it needs no one wearing
+the headphones, and it is how everything marked "works" above was checked:
+
+    mdrctl clear-bass -3
+    systemctl --user restart mdrctld    # fresh session
+    mdrctl status                       # did it keep it?
+
+### Equalizer: bands and clear bass are one message
+
+Clear bass is the first element of the band array on the wire, which has two
+consequences, both found by watching values drift:
+
+- a clear-bass-only change is staged, committed locally and **never sent** --
+  the library only builds the message when bands are staged too
+- a bands-only change sends whatever clear bass was last staged, so clear bass
+  slides by a step every time you touch the bands
+
+`write_eq()` therefore always restates both. That is what makes either stick.
+
+Preset is a separate message and is sent unconditionally, yet the device
+ignores it: tested with two different presets, each checked from a fresh
+session. So the widget shows the preset and does not offer to change it.
+
+### Auto power off is one setting, not two
+
+On a device with wearing detection the library ignores the minutes entirely
+and stages "power off when removed from ears" instead. Offering "switch off
+after N minutes" and "power off when removed" as independent controls produces
+a write that looks lost. They are alternatives: when removed, never, or one of
+5 / 15 / 30 / 60 / 180 minutes.
 
 Use `./tools/dump.py --expect N` to map an unknown field: it flags any byte
 close to a value you can verify on the headphones themselves.
@@ -181,8 +237,10 @@ would answer it. Worth doing for curiosity; nothing is waiting on it.
 
 ## Next
 
-- the popup's mode buttons and ambient slider need one test with the
-  headphones on a head
-- the popup's "Start mdrctld" button is the one control not exercised yet
-- equalizer is readable and untouched
+- connection mode, auto power off, auto pause and shutdown are wired up but
+  unproven; reconnect-test each before trusting it
+- the popup's "Start mdrctld" button is not exercised yet
+- why the device ignores a preset write is unexplained
 - focus-on-voice is read but not writable from the popup
+- `mdrHeadphonesSetPacketCallback` would show which of our writes actually
+  reach the wire, and settle both the preset mystery and the missing echo

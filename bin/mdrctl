@@ -1,13 +1,28 @@
 #!/usr/bin/env python3
 """Talk to mdrctld. Everything here is cheap: no Bluetooth, just a socket.
 
-    mdrctl status            what the headphones are doing
-    mdrctl status --json     the same, for a bar widget
-    mdrctl watch             follow changes live
-    mdrctl mode ambient      set a mode (off | cancelling | ambient)
-    mdrctl ambient 15        ambient, at a level from 0 to 20
-    mdrctl cycle             next mode -- what a bar click should run
-    mdrctl reconnect         drop the session and take it again
+    mdrctl status                what the headphones are doing
+    mdrctl status --json         the same, for a bar widget
+    mdrctl watch                 follow changes live
+
+  noise
+    mdrctl mode ambient          off | cancelling | ambient
+    mdrctl ambient 15            ambient, at a level from 0 to 20
+    mdrctl cycle                 next mode -- what a bar click should run
+
+  sound
+    mdrctl bands 0,5,7,7,9       five bands, each -10 to +10
+    mdrctl clear-bass -1         -10 to +10
+    mdrctl dsee on               upscaling of compressed audio
+    mdrctl priority quality      quality (LDAC) | stability
+    mdrctl eq bright             a preset -- ACCEPTED AND IGNORED on the XM5
+
+  power
+    mdrctl power-off when-removed       when-removed | never | 5 | 15 | 30 | 60 | 180
+    mdrctl auto-pause on
+    mdrctl shutdown              switch the headphones off
+
+    mdrctl reconnect             drop the session and take it again
 """
 import json, os, socket, sys, time
 
@@ -79,6 +94,23 @@ def detail(s):
         for b in s.get("batteries", []):
             print(f"  {b['part']}: {b['level']}% (charging: {b['charging']})")
         print(f"  button: {s.get('button_mode')}")
+        if s.get("eq_preset"):
+            bands = s.get("eq_bands") or []
+            line = f"  eq: {s['eq_preset']}"
+            if bands:
+                line += "  [" + " ".join(f"{v:+d}" for v in bands) + "]"
+            line += f"  clear bass {s.get('eq_clear_bass', 0):+d}"
+            print(line)
+        if s.get("dsee") is not None:
+            print(f"  dsee: {'on' if s['dsee'] else 'off'}"
+                  + (f" ({s.get('dsee_type')})" if s.get("dsee") else ""))
+        if s.get("audio_priority"):
+            print(f"  connection: {s['audio_priority']}")
+        if s.get("power_off"):
+            print(f"  switch off: {s['power_off']}"
+                  f", auto pause: {'yes' if s.get('auto_pause') else 'no'}")
+        if s.get("unconfirmed"):
+            print("  not echoed back yet: " + ", ".join(s["unconfirmed"]))
         if s.get("adaptive"):
             print("  adaptive ambient: on")
         if s.get("mode") == "ambient":

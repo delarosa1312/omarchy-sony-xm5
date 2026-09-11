@@ -59,16 +59,16 @@ class Daemon:
         self.hp = None
         self.path = None
         self.state = {}
-        # What we last told the device to do, and what it was reporting when we
-        # said it. The device does not echo our own writes back to us, so we
-        # keep showing what we asked for until its reading actually moves --
-        # that move is the only evidence it has something new to say.
-        self.claim = None
-        self.claim_baseline = None
+        # What we last told the device to do, per field: {field: (value,
+        # baseline, when)}. The device does not echo our own writes back to us,
+        # so we keep showing what we asked for until its reading actually moves
+        # -- that move is the only evidence it has something new to say.
+        self.claims = {}
         self.next_attempt = 0.0
         self.backoff = 2.0
         self.error = None
         self._last_write = 0.0
+        self._features = {}
 
     # -- session ---------------------------------------------------------
 
@@ -105,7 +105,15 @@ class Daemon:
             self.backoff = min(self.backoff * 2, 60.0)
             return
         self.hp, self.error, self.backoff = hp, None, 2.0
-        self.claim = None
+        self.claims = {}
+        try:
+            # Fixed for the life of a session, so read them once. A control the
+            # device does not advertise is not merely useless: its write is
+            # staged, committed locally and never sent, so it looks like it
+            # worked and silently did nothing.
+            self._features = self.hp.features()
+        except mdr.MDRError:
+            self._features = {}
 
     def drop(self, why):
         if self.hp:
@@ -115,7 +123,7 @@ class Daemon:
                 pass
         self.hp = None
         self.error = why
-        self.claim = None
+        self.claims = {}
         self.next_attempt = time.monotonic() + self.backoff
 
     # -- state -----------------------------------------------------------
@@ -144,19 +152,84 @@ class Daemon:
         s["battery"] = main["level"] if main else self.bluez_battery()
         s["charging"] = main["charging"] if main else None
         s["battery_source"] = "mdr" if main else "bluez"
+        s["features"] = self._features
 
-        raw = mdr.NOISE_MODE.get(nc.mode, nc.mode)
-        if self.claim is not None and raw != self.claim_baseline:
-            self.claim = None          # the device finally moved: believe it again
-        s["mode"] = self.claim if self.claim is not None else raw
-        s["mode_confirmed"] = self.claim is None
-        s["mode_reported"] = raw
+        # Read the rest best-effort: a device that does not answer one of
+        # these should not cost us the battery and the noise mode too.
+        try:
+            eq = self.hp.get_equalizer()
+            bands = self.hp.get_equalizer_bands()
+            s["eq_preset"] = mdr.EQ_PRESET.get(eq.preset, eq.preset)
+            s["eq_clear_bass"] = eq.clear_bass
+            s["eq_bands"] = bands
+            s["eq_band_limit"] = mdr.Headphones.BAND_LIMITS.get(len(bands), 10)
+            s["dsee"] = bool(eq.dsee_enabled)
+            s["dsee_type"] = mdr.DSEE.get(eq.dsee_type, eq.dsee_type)
+        except mdr.MDRError:
+            pass
+        try:
+            cm = self.hp.get_connection_mode()
+            s["audio_priority"] = mdr.AUDIO_PRIORITY.get(cm.audio_priority, cm.audio_priority)
+        except mdr.MDRError:
+            pass
+        try:
+            pw = self.hp.get_power()
+            s["auto_power_off"] = pw.auto_power_off_minutes
+            s["wearing_power"] = mdr.WEARING_POWER.get(pw.wearing_power, pw.wearing_power)
+            s["auto_pause"] = bool(pw.auto_pause)
+            # One setting, not two. On a device with wearing detection the
+            # library ignores the minutes entirely and stages "off when
+            # removed" instead, so presenting them as independent controls
+            # makes a write that worked look like one that vanished.
+            s["power_off"] = ("when-removed" if s["wearing_power"] == "when-removed"
+                              else "never" if not pw.auto_power_off_minutes
+                              else str(pw.auto_power_off_minutes))
+            s["power_off_choices"] = mdr.POWER_OFF_CHOICES
+        except mdr.MDRError:
+            pass
+        try:
+            ls = self.hp.get_listening()
+            s["listening"] = mdr.LISTENING_MODE.get(ls.mode, ls.mode)
+            s["room_size"] = mdr.ROOM_SIZE.get(ls.background_room, ls.background_room)
+        except mdr.MDRError:
+            pass
+
+        s["mode"] = mdr.NOISE_MODE.get(nc.mode, nc.mode)
         s["ambient_level"] = nc.ambient_level
         s["ambient_level_max"] = mdr.AMBIENT_LEVEL_MAX
         s["focus_on_voice"] = bool(nc.focus_on_voice)
         s["button_mode"] = mdr.NOISE_BUTTON.get(nc.button_mode, nc.button_mode)
         s["adaptive"] = bool(nc.adaptive_ambient)
+        return self.apply_claims(s)
+
+    # A claim that the device never contradicts would otherwise last forever.
+    # It should: our value is the true one. But if someone sets the same field
+    # back to its old value on the headphones themselves, the reading never
+    # moves and we would go on showing a stale claim, so give up after a while.
+    CLAIM_TTL = 120.0
+
+    def apply_claims(self, s):
+        """Show what we asked for until the device's own reading moves."""
+        now = time.monotonic()
+        unconfirmed = []
+        for field in list(self.claims):
+            value, baseline, when = self.claims[field]
+            raw = s.get(field)
+            if raw != baseline or now - when > self.CLAIM_TTL:
+                del self.claims[field]   # the device moved, or we waited enough
+                continue
+            s[field] = value
+            unconfirmed.append(field)
+        s["unconfirmed"] = sorted(unconfirmed)
+        s["mode_confirmed"] = "mode" not in self.claims
         return s
+
+    def claim(self, field, value):
+        """Record what we just wrote, against what the device says right now."""
+        baseline = self.state.get(field)
+        if field in self.claims:
+            baseline = self.claims[field][1]   # keep the pre-claim reading
+        self.claims[field] = (value, baseline, time.monotonic())
 
     def publish(self, s):
         """Write the state file, and keep writing it even when nothing changes.
@@ -187,7 +260,7 @@ class Daemon:
             return {"ok": False, "error": f"unknown mode {mode!r}"}
         try:
             nc = self.hp.get_noise_control()
-            baseline = mdr.NOISE_MODE.get(nc.mode, nc.mode)
+            baseline = self.state.get("mode", mdr.NOISE_MODE.get(nc.mode, nc.mode))
             nc.mode = mdr.NOISE_MODE_BY_NAME[mode]
             if level is not None:
                 nc.ambient_level = max(0, min(mdr.AMBIENT_LEVEL_MAX, int(level)))
@@ -196,8 +269,66 @@ class Daemon:
             self.drop(str(e))
             return {"ok": False, "error": str(e)}
         # Do not wait for a read-back. The write lands; the echo may never come.
-        self.claim, self.claim_baseline = mode, baseline
+        self.claims["mode"] = (mode, baseline, time.monotonic())
+        if level is not None:
+            self.claims["ambient_level"] = (
+                int(nc.ambient_level), self.state.get("ambient_level"), time.monotonic())
         return {"ok": True, "mode": mode, "confirmed": False}
+
+    def simple(self, action, field=None, value=None):
+        """Run a write, claim what it set, and report it done.
+
+        Deliberately no read-back: the device does not echo a session's own
+        writes, so confirming one turns a write that worked into an error.
+        """
+        if self.hp is None:
+            return {"ok": False, "error": self.error or "no session"}
+        try:
+            action()
+        except (mdr.MDRError, ValueError) as e:
+            if isinstance(e, mdr.MDRError):
+                self.drop(str(e))
+            return {"ok": False, "error": str(e)}
+        if field is not None:
+            self.claim(field, value)
+        return {"ok": True}
+
+    def set_power_off(self, choice):
+        """'when-removed', 'never', or a number of minutes.
+
+        Wearing detection and the timer are alternatives on this device, so
+        asking for minutes has to switch wearing detection off in the same
+        write, or the library quietly stages the wearing-detection value and
+        drops the minutes on the floor.
+        """
+        pw = self.hp.get_power()
+        pw.shutdown_requested = 0
+        if choice == "when-removed":
+            pw.wearing_power = mdr.WEARING_POWER_BY_NAME["when-removed"]
+            pw.auto_power_off_minutes = 0
+        else:
+            pw.wearing_power = mdr.WEARING_POWER_BY_NAME["disabled"]
+            pw.auto_power_off_minutes = 0 if choice == "never" else int(choice)
+        return self.hp.set_power(pw)
+
+    def set_auto_pause(self, on):
+        pw = self.hp.get_power()
+        pw.auto_pause = 1 if on else 0
+        pw.shutdown_requested = 0
+        return self.hp.set_power(pw)
+
+    def shutdown_headphones(self):
+        """The headphones going off takes the link with them, so drop the
+        session ourselves rather than waiting to trip over a dead socket."""
+        if self.hp is None:
+            return {"ok": False, "error": self.error or "no session"}
+        try:
+            self.hp.shutdown()
+        except mdr.MDRError as e:
+            self.drop(str(e))
+            return {"ok": False, "error": str(e)}
+        self.drop("headphones powered off")
+        return {"ok": True}
 
     def handle(self, line):
         parts = line.split()
@@ -218,6 +349,48 @@ class Daemon:
             if not args:
                 return {"ok": False, "error": "ambient needs a level"}
             return self.set_mode("ambient", args[0])
+        if cmd == "eq":
+            if not args:
+                return {"ok": False, "error": "eq needs a preset name"}
+            return self.simple(lambda: self.hp.set_eq_preset(args[0]), "eq_preset", args[0])
+        if cmd == "bands":
+            if len(args) == 1:
+                args = args[0].split(",")
+            return self.simple(lambda: self.hp.write_eq(bands=args),
+                               "eq_bands", [int(v) for v in args])
+        if cmd == "clear-bass":
+            if not args:
+                return {"ok": False, "error": "clear-bass needs a level"}
+            return self.simple(lambda: self.hp.set_clear_bass(args[0]),
+                               "eq_clear_bass", int(args[0]))
+        if cmd == "dsee":
+            if not args or args[0] not in ("on", "off"):
+                return {"ok": False, "error": "dsee takes on or off"}
+            return self.simple(lambda: self.hp.set_dsee(args[0] == "on"),
+                               "dsee", args[0] == "on")
+        if cmd == "priority":
+            if not args:
+                return {"ok": False, "error": "priority takes quality or stability"}
+            return self.simple(lambda: self.hp.set_audio_priority(args[0]),
+                               "audio_priority", args[0])
+        if cmd == "listening":
+            if not args:
+                return {"ok": False, "error": "listening needs a mode"}
+            room = args[1] if len(args) > 1 else None
+            return self.simple(lambda: self.hp.set_listening_mode(args[0], room),
+                               "listening", args[0])
+        if cmd == "power-off":
+            if not args or args[0] not in mdr.POWER_OFF_CHOICES:
+                return {"ok": False,
+                        "error": "power-off takes one of " + ", ".join(mdr.POWER_OFF_CHOICES)}
+            return self.simple(lambda: self.set_power_off(args[0]), "power_off", args[0])
+        if cmd == "auto-pause":
+            if not args or args[0] not in ("on", "off"):
+                return {"ok": False, "error": "auto-pause takes on or off"}
+            return self.simple(lambda: self.set_auto_pause(args[0] == "on"),
+                               "auto_pause", args[0] == "on")
+        if cmd == "shutdown":
+            return self.shutdown_headphones()
         if cmd == "reconnect":
             self.drop("reconnect requested")
             self.next_attempt = 0.0

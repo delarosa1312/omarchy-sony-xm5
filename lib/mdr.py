@@ -22,6 +22,19 @@ PROTOCOL_V2 = 2
 RESULT_OK = 0
 RESULT_INPROGRESS = 1
 
+AVAILABILITY = {0: "unknown", 1: "unavailable", 2: "available"}
+
+# Asking beats trying. A write to an unsupported endpoint is staged, committed
+# and silently dropped -- the library only puts it on the wire if the device
+# advertised support -- so an unsupported control looks exactly like a working
+# one that the device chose to ignore.
+FEATURE = {
+    "noise_cancelling": 8, "ambient_sound": 9, "adaptive_ambient": 10,
+    "speak_to_chat": 11, "listening_mode": 12, "equalizer": 13, "dsee": 14,
+    "auto_power_off": 20, "wearing_detection": 21, "auto_pause": 22,
+    "head_gesture": 23, "shutdown": 26, "connection_mode": 27,
+}
+
 XM5_SERVICE_UUID = "956C7B26-D49A-4BA8-B03F-B17D393CB6E2"
 
 # mdr-c/Headphones.h
@@ -38,6 +51,40 @@ ADAPTIVE_SENSITIVITY = {0: "unknown", 1: "low", 2: "standard", 3: "high"}
 
 # Ambient level runs 0-20 on this family; 20 lets the most sound through.
 AMBIENT_LEVEL_MAX = 20
+
+EQ_PRESET = {
+    0: "off", 1: "rock", 2: "pop", 3: "jazz", 4: "dance", 5: "edm",
+    6: "r&b/hip-hop", 7: "acoustic", 8: "bright", 9: "excited", 10: "mellow",
+    11: "relaxed", 12: "vocal", 13: "treble", 14: "bass", 15: "speech",
+    16: "heavy", 17: "clear", 18: "hard", 19: "soft", 20: "gaming",
+    21: "fps-1", 22: "fps-2", 23: "fps-3", 24: "custom",
+    25: "user-1", 26: "user-2", 27: "user-3", 28: "user-4", 29: "user-5",
+    255: "unknown",
+}
+EQ_PRESET_BY_NAME = {v: k for k, v in EQ_PRESET.items()}
+
+# DSEE upscales compressed audio. Worth having on a service that tops out at
+# 256 kbps; the device reports which generation of it the hardware implements.
+DSEE = {0: "unknown", 1: "standard", 2: "hx", 3: "hx-ai", 4: "ultimate"}
+
+# The LDAC lever: quality asks for the higher bitrate, stability drops it when
+# the link is busy.
+AUDIO_PRIORITY = {0: "unknown", 1: "quality", 2: "stability"}
+AUDIO_PRIORITY_BY_NAME = {v: k for k, v in AUDIO_PRIORITY.items() if v != "unknown"}
+
+LISTENING_MODE = {0: "standard", 1: "background-music", 2: "cinema"}
+LISTENING_MODE_BY_NAME = {v: k for k, v in LISTENING_MODE.items()}
+ROOM_SIZE = {0: "unknown", 1: "small", 2: "medium", 3: "large"}
+ROOM_SIZE_BY_NAME = {v: k for k, v in ROOM_SIZE.items() if v != "unknown"}
+
+WEARING_POWER = {0: "unavailable", 1: "disabled", 2: "when-removed"}
+WEARING_POWER_BY_NAME = {v: k for k, v in WEARING_POWER.items() if v != "unavailable"}
+
+# Auto power off is one setting with alternatives, not two independent ones:
+# a device with wearing detection powers off when removed OR after N minutes of
+# silence, never both. The library accepts only these minute values on V2.
+AUTO_POWER_OFF_MINUTES = [5, 15, 30, 60, 180]
+POWER_OFF_CHOICES = ["when-removed", "never"] + [str(m) for m in AUTO_POWER_OFF_MINUTES]
 
 
 class Battery(C.Structure):
@@ -62,6 +109,39 @@ class NoiseControl(C.Structure):
         ("button_mode", C.c_uint32),
         ("adaptive_ambient", C.c_uint32),
         ("adaptive_sensitivity", C.c_uint32),
+    ]
+
+
+class Equalizer(C.Structure):
+    # mdr-c/Headphones.h. clear_bass is signed: it cuts as well as boosts.
+    _fields_ = [
+        ("preset", C.c_uint32),
+        ("clear_bass", C.c_int8),
+        ("band_count", C.c_uint32),
+        ("dsee_enabled", C.c_uint32),
+        ("dsee_type", C.c_uint32),
+    ]
+
+
+class ConnectionMode(C.Structure):
+    _fields_ = [("audio_priority", C.c_uint32)]
+
+
+class Power(C.Structure):
+    _fields_ = [
+        ("auto_power_off_minutes", C.c_uint32),
+        ("wearing_power", C.c_uint32),
+        ("auto_pause", C.c_uint32),
+        ("head_gesture", C.c_uint32),
+        # Write-only in practice: setting it asks the headphones to switch off.
+        ("shutdown_requested", C.c_uint32),
+    ]
+
+
+class Listening(C.Structure):
+    _fields_ = [
+        ("mode", C.c_uint32),
+        ("background_room", C.c_uint32),
     ]
 
 
@@ -104,6 +184,26 @@ class Library:
                              C.POINTER(NoiseControl))
         self.set_noise = sig(self.mdr, "mdrHeadphonesSetNoiseControl", u32, p,
                              C.POINTER(NoiseControl))
+        self.get_eq = sig(self.mdr, "mdrHeadphonesGetEqualizer", u32, p,
+                          C.POINTER(Equalizer))
+        self.set_eq = sig(self.mdr, "mdrHeadphonesSetEqualizer", u32, p,
+                          C.POINTER(Equalizer))
+        self.get_eq_bands = sig(self.mdr, "mdrHeadphonesGetEqualizerBands", u32, p,
+                                C.POINTER(C.c_int8), C.POINTER(u32))
+        self.set_eq_bands = sig(self.mdr, "mdrHeadphonesSetEqualizerBands", u32, p,
+                                C.POINTER(C.c_int8), u32)
+        self.get_conn_mode = sig(self.mdr, "mdrHeadphonesGetConnectionMode", u32, p,
+                                 C.POINTER(ConnectionMode))
+        self.set_conn_mode = sig(self.mdr, "mdrHeadphonesSetConnectionMode", u32, p,
+                                 C.POINTER(ConnectionMode))
+        self.get_power = sig(self.mdr, "mdrHeadphonesGetPower", u32, p, C.POINTER(Power))
+        self.set_power = sig(self.mdr, "mdrHeadphonesSetPower", u32, p, C.POINTER(Power))
+        self.get_listening = sig(self.mdr, "mdrHeadphonesGetListening", u32, p,
+                                 C.POINTER(Listening))
+        self.set_listening = sig(self.mdr, "mdrHeadphonesSetListening", u32, p,
+                                 C.POINTER(Listening))
+        self.get_feature = sig(self.mdr, "mdrHeadphonesGetFeature", u32, p, u32,
+                               C.POINTER(u32))
         self._result_string = sig(self.mdr, "mdrResultString", C.c_char_p, u32)
 
     def result(self, code):
@@ -222,6 +322,199 @@ class Headphones:
             nc.ambient_level = max(0, min(AMBIENT_LEVEL_MAX, int(ambient_level)))
         return self.set_noise_control(nc)
 
+    def feature(self, name):
+        """'available', 'unavailable' or 'unknown'."""
+        if name not in FEATURE:
+            raise ValueError(f"unknown feature {name!r}")
+        out = C.c_uint32(0)
+        r = self.lib.get_feature(self._hp, FEATURE[name], C.byref(out))
+        if r != RESULT_OK:
+            return "unknown"
+        return AVAILABILITY.get(out.value, "unknown")
+
+    def features(self):
+        return {name: self.feature(name) for name in FEATURE}
+
+    # ---- equalizer ----------------------------------------------------
+
+    def get_equalizer(self):
+        eq = Equalizer()
+        r = self.lib.get_eq(self._hp, C.byref(eq))
+        if r != RESULT_OK:
+            raise MDRError(f"equalizer read failed: {self.lib.result(r)}")
+        return eq
+
+    def set_equalizer(self, eq, settle=0.2):
+        """Writes are fire-and-forget, for the same reason as noise control:
+        the device does not echo a session's own changes back to it."""
+        r = self.lib.set_eq(self._hp, C.byref(eq))
+        if r != RESULT_OK:
+            raise MDRError(f"equalizer write failed: {self.lib.result(r)}")
+        self.lib.hp_commit(self._hp)
+        deadline = time.monotonic() + settle
+        while time.monotonic() < deadline:
+            self.pump(20)
+        return eq
+
+    def _eq_for_write(self):
+        """The struct read back is not safe to write straight home.
+
+        The library rejects a band_count that is neither 0 nor exactly the
+        current one, and a dsee_type that is neither 0 nor exactly the current
+        one. Zero means "leave it alone" for both, and bands are written
+        through set_equalizer_bands anyway, so zero both before writing.
+        """
+        eq = self.get_equalizer()
+        eq.band_count = 0
+        eq.dsee_type = 0
+        return eq
+
+    def set_eq_preset(self, preset):
+        if isinstance(preset, str):
+            if preset not in EQ_PRESET_BY_NAME:
+                raise ValueError(f"preset must be one of {sorted(EQ_PRESET_BY_NAME)}")
+            preset = EQ_PRESET_BY_NAME[preset]
+        eq = self._eq_for_write()
+        eq.preset = preset
+        return self.set_equalizer(eq)
+
+    def set_dsee(self, enabled):
+        eq = self._eq_for_write()
+        eq.dsee_enabled = 1 if enabled else 0
+        return self.set_equalizer(eq)
+
+    def write_eq(self, bands=None, clear_bass=None):
+        """Write bands and clear bass together, because the device does.
+
+        They share one message: clear bass is the first element of the band
+        array on the wire. Two consequences, both learned the hard way.
+
+        A clear-bass-only change is staged, committed locally and never sent --
+        the library only builds that message when bands are staged too. And a
+        bands-only change sends whatever clear bass was last staged, which is
+        not necessarily what the device currently has, so clear bass drifts by
+        a step every time you touch the bands.
+
+        Restating both on every write is what makes either of them stick.
+        """
+        current_bands = self.get_equalizer_bands()
+        eq = self._eq_for_write()
+        if clear_bass is not None:
+            clear_bass = int(clear_bass)
+            if not -10 <= clear_bass <= 10:
+                raise ValueError("clear bass runs from -10 to +10")
+            eq.clear_bass = clear_bass
+        self.set_equalizer(eq, settle=0)
+        return self.set_equalizer_bands(current_bands if bands is None else bands)
+
+    def set_clear_bass(self, level):
+        return self.write_eq(clear_bass=level)
+
+    def get_equalizer_bands(self, maximum=16):
+        count = C.c_uint32(maximum)
+        buf = (C.c_int8 * maximum)()
+        r = self.lib.get_eq_bands(self._hp, buf, C.byref(count))
+        if r != RESULT_OK:
+            raise MDRError(f"equalizer band read failed: {self.lib.result(r)}")
+        return [int(v) for v in list(buf)[: count.value]]
+
+    # 5 bands run -10..+10; the 10-band variant runs -6..+6. The library
+    # rejects anything else, and rejects a count that is not 5 or 10.
+    BAND_LIMITS = {5: 10, 10: 6}
+
+    def set_equalizer_bands(self, values, settle=0.2):
+        values = [int(v) for v in values]
+        limit = self.BAND_LIMITS.get(len(values))
+        if limit is None:
+            raise ValueError("the device takes exactly 5 or 10 bands")
+        if any(abs(v) > limit for v in values):
+            raise ValueError(f"{len(values)} bands run from -{limit} to +{limit}")
+        buf = (C.c_int8 * len(values))(*values)
+        r = self.lib.set_eq_bands(self._hp, buf, len(values))
+        if r != RESULT_OK:
+            raise MDRError(f"equalizer band write failed: {self.lib.result(r)}")
+        self.lib.hp_commit(self._hp)
+        deadline = time.monotonic() + settle
+        while time.monotonic() < deadline:
+            self.pump(20)
+        return list(values)
+
+    # ---- connection, power, listening ----------------------------------
+
+    def get_connection_mode(self):
+        cm = ConnectionMode()
+        r = self.lib.get_conn_mode(self._hp, C.byref(cm))
+        if r != RESULT_OK:
+            raise MDRError(f"connection mode read failed: {self.lib.result(r)}")
+        return cm
+
+    def set_audio_priority(self, priority, settle=0.2):
+        """'quality' asks for LDAC's higher bitrate, 'stability' drops it."""
+        if isinstance(priority, str):
+            if priority not in AUDIO_PRIORITY_BY_NAME:
+                raise ValueError(f"priority must be one of {sorted(AUDIO_PRIORITY_BY_NAME)}")
+            priority = AUDIO_PRIORITY_BY_NAME[priority]
+        cm = ConnectionMode(audio_priority=priority)
+        r = self.lib.set_conn_mode(self._hp, C.byref(cm))
+        if r != RESULT_OK:
+            raise MDRError(f"connection mode write failed: {self.lib.result(r)}")
+        self.lib.hp_commit(self._hp)
+        deadline = time.monotonic() + settle
+        while time.monotonic() < deadline:
+            self.pump(20)
+        return cm
+
+    def get_power(self):
+        pw = Power()
+        r = self.lib.get_power(self._hp, C.byref(pw))
+        if r != RESULT_OK:
+            raise MDRError(f"power read failed: {self.lib.result(r)}")
+        return pw
+
+    def set_power(self, pw, settle=0.2):
+        r = self.lib.set_power(self._hp, C.byref(pw))
+        if r != RESULT_OK:
+            raise MDRError(f"power write failed: {self.lib.result(r)}")
+        self.lib.hp_commit(self._hp)
+        deadline = time.monotonic() + settle
+        while time.monotonic() < deadline:
+            self.pump(20)
+        return pw
+
+    def shutdown(self):
+        """Ask the headphones to switch off. The link dies with them, so the
+        caller should expect the session to end rather than stay usable."""
+        pw = self.get_power()
+        pw.shutdown_requested = 1
+        return self.set_power(pw)
+
+    def get_listening(self):
+        ls = Listening()
+        r = self.lib.get_listening(self._hp, C.byref(ls))
+        if r != RESULT_OK:
+            raise MDRError(f"listening read failed: {self.lib.result(r)}")
+        return ls
+
+    def set_listening_mode(self, mode, room=None, settle=0.2):
+        if isinstance(mode, str):
+            if mode not in LISTENING_MODE_BY_NAME:
+                raise ValueError(f"mode must be one of {sorted(LISTENING_MODE_BY_NAME)}")
+            mode = LISTENING_MODE_BY_NAME[mode]
+        ls = self.get_listening()
+        ls.mode = mode
+        if room is not None:
+            if isinstance(room, str):
+                room = ROOM_SIZE_BY_NAME[room]
+            ls.background_room = room
+        r = self.lib.set_listening(self._hp, C.byref(ls))
+        if r != RESULT_OK:
+            raise MDRError(f"listening write failed: {self.lib.result(r)}")
+        self.lib.hp_commit(self._hp)
+        deadline = time.monotonic() + settle
+        while time.monotonic() < deadline:
+            self.pump(20)
+        return ls
+
     def close(self):
         if self._hp:
             self.lib.hp_destroy(self._hp)
@@ -249,3 +542,30 @@ def describe_noise(nc):
     if nc.adaptive_ambient:
         parts.append(f"adaptive ({ADAPTIVE_SENSITIVITY.get(nc.adaptive_sensitivity)})")
     return ", ".join(parts)
+
+
+def describe_equalizer(eq, bands=None):
+    parts = [f"preset: {EQ_PRESET.get(eq.preset, eq.preset)}"]
+    parts.append(f"clear bass: {eq.clear_bass:+d}")
+    if bands:
+        parts.append("bands: " + " ".join(f"{v:+d}" for v in bands))
+    parts.append(f"DSEE: {'on' if eq.dsee_enabled else 'off'}"
+                 + (f" ({DSEE.get(eq.dsee_type)})" if eq.dsee_enabled else ""))
+    return ", ".join(parts)
+
+
+def describe_power(pw):
+    off = pw.auto_power_off_minutes
+    parts = [f"auto power off: {'never' if off == 0 else str(off) + ' min'}"]
+    parts.append(f"when removed: {WEARING_POWER.get(pw.wearing_power, pw.wearing_power)}")
+    parts.append(f"auto pause: {'yes' if pw.auto_pause else 'no'}")
+    if pw.head_gesture:
+        parts.append("head gesture: yes")
+    return ", ".join(parts)
+
+
+def describe_listening(ls):
+    mode = LISTENING_MODE.get(ls.mode, ls.mode)
+    if ls.mode == 1:
+        return f"mode: {mode}, room: {ROOM_SIZE.get(ls.background_room, ls.background_room)}"
+    return f"mode: {mode}"
