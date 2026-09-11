@@ -121,6 +121,21 @@ part that needs the session.
 - Connecting is asynchronous: poll until it stops reporting progress, then do
   the protocol handshake.
 
+## The widget
+
+The Omarchy bar widget lives in `shell-plugin/` and is published separately, at
+[omarchy-sony-xm5](https://github.com/delarosa1312/omarchy-sony-xm5) -- the
+marketplace clones a repository and reads `manifest.json` at its root, so it
+cannot sit in a subdirectory of this one.
+
+    ./scripts/sync-plugin.sh push    # repo -> the live plugin, and reload
+    ./scripts/sync-plugin.sh pull    # the live plugin -> repo
+    ./scripts/publish-plugin.sh      # test, then push it to its own repo
+
+`publish-plugin.sh` rebuilds that repository's history from the plugin's
+commits here, so there is one place to edit and no second copy to keep level
+by hand.
+
 ## Tests
 
     ./scripts/test
