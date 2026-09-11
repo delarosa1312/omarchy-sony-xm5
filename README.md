@@ -42,17 +42,35 @@ files. The GUI is not built.
 
 ## Status
 
-Working: build, connect, handshake, session lifecycle, battery read returns OK.
+Reading works. `./tools/probe.py` reports the real battery level, and
+`./tools/dump.py` returns data from every endpoint the device supports.
 
-The struct layout was verified against the header and is correct. The earlier
-"0% while charging" was our own misreading: `charging` is an enum, not a
-boolean, and 1 means *not* charging. `describe()` now decodes both enums.
+**The handshake completing does not mean the state has arrived.** Reading
+immediately gives zeroes; values land over the following second or two. So
+`open()` now issues a sync and pumps events for a couple of seconds before
+returning. This was the cause of the "0% battery" that first looked like a
+struct bug.
 
-Open: `level_percent` still reads 0. The value may only arrive with a later
-event, so the next step is to watch the event stream rather than reading once
-after the handshake. The library also logs `FIXME-ACK Timeout` retries during
-connect, which may be related.
+`charging` is an enum, not a boolean — 1 means *not* charging. Reading it as
+truthy reports every idle headphone as charging.
 
-Next: watch events to get live values, add the setters worth having, then a
-daemon that holds the link plus a thin CLI (`mdrctl watch`), and the bar widget
-on top of that.
+### What the device answers (WH-1000XM5)
+
+| Endpoint | State |
+|---|---|
+| Batteries | works — main, level, charging |
+| NoiseControl | returns data, fields not yet mapped |
+| Equalizer, EqualizerBands | works — 5 bands |
+| Playback, Power, Listening, SpeakToChat | return data |
+| VoiceGuidance, ConnectionMode | single byte each |
+| PairedDevices | works — 6 devices with MAC and name |
+| Model, GeneralSettingInfo | return data |
+| Pairing, SafeListening | empty |
+| AssignableControls | "Not supported" |
+
+Use `./tools/dump.py --expect N` to map an unknown field: it flags any byte
+close to a value you can verify on the headphones themselves.
+
+Next: map the NoiseControl fields (the ones the widget needs), add setters,
+then a daemon holding the link plus a thin CLI (`mdrctl watch`), then the
+bar widget.

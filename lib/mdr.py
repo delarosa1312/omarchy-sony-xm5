@@ -100,7 +100,13 @@ class Headphones:
     def __exit__(self, *_):
         self.close()
 
-    def open(self, link_timeout=5.0, ready_timeout=10.0):
+    def open(self, link_timeout=5.0, ready_timeout=10.0, settle=2.0):
+        """Connect, handshake, then let state arrive.
+
+        `settle` matters: the handshake completing only means the device is
+        talking. Values such as battery level land afterwards, so reading
+        immediately returns zeroes. Two seconds is enough in practice.
+        """
         lib = self.lib
         self._handle = lib.conn_create()
         self._conn = lib.conn_get(self._handle)
@@ -130,8 +136,14 @@ class Headphones:
         while time.monotonic() < deadline:
             self.pump()
             if lib.hp_ready(self._hp):
-                return
-        raise MDRError("headphones never became ready (is the app or phone holding the link?)")
+                break
+        else:
+            raise MDRError("headphones never became ready (is the app or phone holding the link?)")
+
+        lib.hp_sync(self._hp)
+        deadline = time.monotonic() + settle
+        while time.monotonic() < deadline:
+            self.pump(50)
 
     def pump(self, timeout_ms=100):
         """Drive both the socket and the protocol state machine once."""
