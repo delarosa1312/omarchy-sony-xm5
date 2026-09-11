@@ -286,6 +286,10 @@ class Daemon:
         self.hp = None
         self.error = why
         self.claims = {}
+        # What we lately wrote to the pair that just went away says nothing
+        # about the pair that comes next. Kept, it would let a value written
+        # to the headphones suppress a genuine reading from the buds.
+        self.recent = {}
         self.next_attempt = time.monotonic() + self.backoff
 
     # -- state -----------------------------------------------------------
