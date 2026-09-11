@@ -35,6 +35,13 @@ files. The GUI is not built.
     bin/mdrctl ambient 15                # ambient, level 0-20
     bin/mdrctl cycle                     # next mode; what a bar click runs
 
+There is no address to configure. The daemon takes whichever connected device
+offers the MDR service, so a second Sony pair works the first time it is put
+on. Set `MDR_MAC` only to pin it to one, which matters solely when two are
+connected at once.
+
+    python3 -m unittest discover -s tests   # no headphones required
+
 **Stop the daemon before using Sony's app**, on the phone or anywhere else. The
 device allows one control session at a time and the daemon holds it:
 
@@ -106,6 +113,15 @@ part that needs the session.
   handshake hangs.
 - Connecting is asynchronous: poll until it stops reporting progress, then do
   the protocol handshake.
+
+## Tests
+
+`tests/test_mdrctl.py` covers the things that were wrong once: the equaliser's
+two halves staged before a single commit, discovery picking a connected
+MDR device and nothing else, and a claimed value surviving the device's own
+late echo of it. All of it runs without headphones, BlueZ or libmdr, because
+none of those bugs were hardware problems -- and none of them were visible in
+the panel either, which is the point.
 
 ## Status
 

@@ -14,7 +14,14 @@ import json, os, select, socket, sys, time, subprocess, signal, errno
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
 import mdr
 
-MAC = os.environ.get("MDR_MAC", "00:00:5E:00:53:01")
+# Which headphones. Normally none: the daemon takes whichever Sony device is
+# connected, so a pair it has never seen works the moment you put it on. Set
+# MDR_MAC to pin it to one, which is only useful if two are on at once.
+MAC = os.environ.get("MDR_MAC", "")
+# The service a Sony device offers if it speaks MDR at all. This is how the
+# headphones are recognised -- by what they can do rather than by address --
+# and it is the same UUID the session is opened on.
+MDR_UUID = "956c7b26-d49a-4ba8-b03f-b17d393cb6e2"
 BUILD = os.environ.get(
     "MDR_BUILD",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "vendor",
@@ -42,6 +49,53 @@ def bluez_path(mac):
     return None
 
 
+def bluez_devices():
+    """Every device BlueZ knows, in one call. Asking for the whole tree at once
+    beats a property read per device: this runs while we are looking for a
+    headset to talk to, which is exactly when nothing else is happening."""
+    try:
+        out = subprocess.run(
+            ["busctl", "--json=short", "call", "org.bluez", "/",
+             "org.freedesktop.DBus.ObjectManager", "GetManagedObjects"],
+            capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if out.returncode != 0:
+        return {}
+    try:
+        objects = json.loads(out.stdout)["data"][0]
+    except (ValueError, KeyError, IndexError):
+        return {}
+    found = {}
+    for path, ifaces in objects.items():
+        dev = ifaces.get("org.bluez.Device1")
+        if not dev:
+            continue
+        def field(name, fallback=None):
+            entry = dev.get(name)
+            return entry.get("data", fallback) if isinstance(entry, dict) else fallback
+        found[path] = {
+            "mac": str(field("Address", "")).upper(),
+            "name": str(field("Name", "") or field("Alias", "")),
+            "connected": field("Connected", False) is True,
+            "uuids": [str(u).lower() for u in (field("UUIDs", []) or [])],
+        }
+    return found
+
+
+def find_headphones(pinned=""):
+    """The connected device that speaks MDR. Recognising the headphones by the
+    service they offer rather than by a hard-coded address means a pair this
+    has never seen -- a second Sony set, a replacement -- works on sight."""
+    for path, dev in sorted(bluez_devices().items()):
+        if not dev["connected"] or MDR_UUID not in dev["uuids"]:
+            continue
+        if pinned and dev["mac"] != pinned.upper():
+            continue
+        return path, dev
+    return None, None
+
+
 def bluez_get(path, iface, prop):
     """One property, or None. Shelling out beats a D-Bus dependency here: this
     is called once every few seconds, and only while we have no session."""
@@ -61,6 +115,9 @@ class Daemon:
         self.lib = mdr.Library(BUILD)
         self.hp = None
         self.path = None
+        # Filled in by present(), which is what decides who we are talking to.
+        self.mac = MAC
+        self.model = ""
         self.state = {}
         # What we last told the device to do, per field: {field: (value,
         # baseline, when)}. The device does not echo our own writes back to us,
@@ -98,12 +155,21 @@ class Daemon:
     # -- session ---------------------------------------------------------
 
     def present(self):
-        """Is the headset connected to the machine at all (BlueZ's view)?"""
-        if self.path is None:
-            self.path = bluez_path(MAC)
-            if self.path is None:
-                return False
-        return bluez_get(self.path, "org.bluez.Device1", "Connected") == "true"
+        """Is a headset connected to the machine at all (BlueZ's view)?
+
+        While a session is up this is one cheap property read on the device we
+        already hold. With no session it is a full look around, because the
+        pair that is on now may not be the pair that was on last time.
+        """
+        if self.path is not None and self.hp is not None:
+            return bluez_get(self.path, "org.bluez.Device1", "Connected") == "true"
+        path, dev = find_headphones(MAC)
+        if path is None:
+            return False
+        if path != self.path:
+            self.path, self._adapter_mac = path, None
+        self.mac, self.model = dev["mac"], dev["name"]
+        return True
 
     def adapter_mac(self):
         """This machine's own Bluetooth address, so it can be told apart from
@@ -130,7 +196,7 @@ class Daemon:
             self.next_attempt = time.monotonic() + 5.0
             return
         try:
-            hp = mdr.Headphones(self.lib, MAC)
+            hp = mdr.Headphones(self.lib, self.mac)
             # This session never closes, and the main loop pumps continuously,
             # so a write does not need to sit and pump before returning. That
             # wait was 200 ms on every single action.
@@ -217,6 +283,9 @@ class Daemon:
     IDLE_WAIT = 0.02
     # Nothing to pump while there is no session; just do not hammer connect().
     RETRY_WAIT = 0.25
+    # How long a connection may sit there having said nothing before it is
+    # dropped. Nothing waits on this -- it is a deadline, not a pause.
+    REQUEST_WAIT = 2.0
 
     def refresh(self):
         # Having a session object is not the same as having a link. The library
@@ -229,9 +298,12 @@ class Daemon:
             if not self.present():
                 self.drop("headphones disconnected")
 
-        s = {"updated": time.time(), "mac": MAC,
-             "present": bool(self.hp) or self.present(),
-             "session": bool(self.hp), "error": self.error}
+        # present() is what discovers the headphones, so call it before
+        # reporting who they are -- otherwise the first state published after
+        # a new pair connects still carries the old pair's name.
+        here = bool(self.hp) or self.present()
+        s = {"updated": time.time(), "mac": self.mac, "model": self.model,
+             "present": here, "session": bool(self.hp), "error": self.error}
         if not self.hp:
             s["battery"] = self.bluez_battery()
             s["battery_source"] = "bluez"
@@ -312,7 +384,7 @@ class Daemon:
             s["self_mac"] = mine
             s["others_connected"] = sorted(
                 d["name"] or d["mac"] for d in devices
-                if d["connected"] and d["mac"].upper() not in (MAC.upper(), mine))
+                if d["connected"] and d["mac"].upper() not in (self.mac.upper(), mine))
         except mdr.MDRError:
             pass
 
@@ -609,6 +681,7 @@ class Daemon:
             signal.signal(sig, lambda *_: stop.append(True))
 
         buffers = {}
+        greeting = {}
         last_refresh = 0.0
         while not stop:
             if self.hp is None:
@@ -628,7 +701,10 @@ class Daemon:
             # instead, and wakes the moment a command lands, so nothing here
             # answers any slower than it did before.
             wait = self.IDLE_WAIT if self.hp else self.RETRY_WAIT
-            ready, _, _ = select.select([srv] + self.subscribers, [], [], wait)
+            # Accepted, but has not said what it wants yet. They wait in the
+            # select set like everyone else rather than in a read of their own.
+            ready, _, _ = select.select(
+                [srv] + self.subscribers + list(greeting), [], [], wait)
             dirty = False
             for sock in ready:
                 if sock is srv:
@@ -638,11 +714,22 @@ class Daemon:
                         if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
                             raise
                         continue
-                    if self.serve(conn):
+                    conn.setblocking(False)
+                    greeting[conn] = time.monotonic() + self.REQUEST_WAIT
+                elif sock in greeting:
+                    del greeting[sock]
+                    if self.serve(sock):
                         dirty = True
                 else:
                     if self.serve_subscriber(sock, buffers):
                         dirty = True
+
+            # A client that connects and then says nothing is not a client.
+            if greeting:
+                now = time.monotonic()
+                for conn in [c for c, due in greeting.items() if now > due]:
+                    del greeting[conn]
+                    conn.close()
 
             now = time.monotonic()
             # A command's effect should show immediately, not on the next tick.
@@ -651,6 +738,8 @@ class Daemon:
                 self.publish(self.refresh())
 
         srv.close()
+        for conn in list(greeting):
+            conn.close()
         for conn in list(self.subscribers):
             self.drop_subscriber(conn)
         for p in (SOCKET, STATE):
@@ -690,18 +779,26 @@ class Daemon:
         return acted
 
     def serve(self, conn):
-        """One request on a fresh connection. `subscribe` keeps it open and
-        turns it into a push channel, which is what the bar widget uses so it
-        never has to poll."""
+        """One request from a client that has now said something.
+
+        Nothing waits here. A connection is only handed to this once select
+        says it is readable, because the loop is single-threaded: waiting even
+        briefly on a client that has gone quiet holds up the MDR pump and every
+        subscriber behind it.
+
+        `subscribe` keeps the connection open and turns it into a push channel,
+        which is what the bar widget uses so it never has to poll.
+        """
         try:
-            conn.settimeout(2.0)
             line = conn.recv(4096).decode(errors="replace").strip()
         except (OSError, UnicodeDecodeError):
             conn.close()
             return False
+        if not line:                      # the client hung up
+            conn.close()
+            return False
 
         if line == "subscribe":
-            conn.settimeout(None)
             conn.setblocking(False)
             self.subscribers.append(conn)
             try:
