@@ -37,8 +37,12 @@ BarWidget {
   readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
   function closeForPopoutSwitch() { if (panelLoader.item) panelLoader.item.closeForPopoutSwitch() }
 
-  // Gone entirely when the headphones are, rather than sitting there dead.
-  visible: panelLoader.item ? panelLoader.item.present : false
+  // Gone entirely when the headphones are, rather than sitting there dead --
+  // but present when the daemon has never answered, because that is a missing
+  // install rather than a headset in its case, and silence there reads as a
+  // widget that did not work.
+  visible: panelLoader.item
+    ? (panelLoader.item.present || panelLoader.item.needsSetup) : false
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 

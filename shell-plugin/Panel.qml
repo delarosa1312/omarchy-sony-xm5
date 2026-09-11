@@ -55,7 +55,7 @@ Panel {
                                                 : setting("mac", "")
   readonly property string model:
     state.model !== undefined && state.model !== "" ? String(state.model)
-                                                    : setting("name", "Headphones")
+                                                    : setting("name", "Sony XM5")
 
   // BlueZ knows whether the headphones are connected and roughly how full they
   // are without any control session, so the widget survives a stopped daemon
@@ -77,6 +77,19 @@ Panel {
   readonly property bool fresh: state.updated !== undefined && (nowSec - Number(state.updated)) < 6
 
   readonly property bool present: linked || (fresh && state.present === true)
+
+  // Has a daemon ever answered? Installing the widget on its own leaves one
+  // that can never do anything, and hiding it -- which is right when the
+  // headphones are simply off -- made that look like an install that failed.
+  // Latched, so a restart of the daemon does not flash a setup prompt at
+  // somebody who plainly already has it.
+  property bool daemonSeen: false
+  readonly property bool needsSetup: !daemonSeen && !link.connected && !fresh
+  // A daemon that answers at all counts, session or not: someone who has it
+  // installed but has never switched the headphones on must not be told to
+  // go and install it.
+  onSessionChanged: if (session) daemonSeen = true
+  onFreshChanged: if (fresh) daemonSeen = true
   readonly property bool session: fresh && state.session === true
   readonly property string mode: String(eff("mode", ""))
   readonly property bool modeConfirmed: pending["mode"] === undefined && state.mode_confirmed !== false
@@ -203,6 +216,7 @@ Panel {
     : mode === "off" ? "Noise control off" : "Unknown"
 
   readonly property string barLabel: {
+    if (needsSetup) return glyph
     var parts = [glyph]
     if (modeTag !== "") parts.push(modeTag + (modeConfirmed ? "" : "?"))
     if (battery >= 0) parts.push(battery + "%" + (charging ? "+" : ""))
@@ -210,6 +224,7 @@ Panel {
   }
 
   readonly property string barTooltip: {
+    if (needsSetup) return "Needs mdrctld — click to see what to install"
     if (!present) return ""
     if (!session) return model + " — battery only, no control session"
     return model + " — " + modeName + (battery >= 0 ? ", " + battery + "%" : "")
@@ -358,7 +373,12 @@ Panel {
     id: link
     path: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/mdrctl/sock"
     connected: true
-    onConnectedChanged: if (connected) write("subscribe\n")
+    onConnectedChanged: {
+      if (connected) {
+        root.daemonSeen = true
+        write("subscribe\n")
+      }
+    }
 
     parser: SplitParser {
       splitMarker: "\n"
@@ -1070,9 +1090,13 @@ Panel {
 
           Text {
             width: parent.width
-            text: root.errorText !== ""
-              ? root.errorText
-              : "No control session. BlueZ still reports the battery, but noise control needs mdrctld."
+            text: root.needsSetup
+              ? "This widget is a face for mdrctld, which is not answering. It is a "
+                + "separate install: github.com/delarosa1312/mdrctl — build it, run "
+                + "./scripts/install.sh, and this fills in by itself."
+              : root.errorText !== ""
+                ? root.errorText
+                : "No control session. BlueZ still reports the battery, but noise control needs mdrctld."
             color: root.errorText !== "" ? root.urgent : root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -1080,6 +1104,7 @@ Panel {
           }
 
           Button {
+            visible: !root.needsSetup      // nothing to start if it is not there
             text: "Start mdrctld"
             bordered: true
             foreground: root.foreground

@@ -55,7 +55,18 @@ mdrctl install sets that up.
 
 ## Install
 
+Two pieces, because the bar widget cannot talk Bluetooth by itself. The daemon
+first:
+
+    git clone https://github.com/delarosa1312/mdrctl
+    cd mdrctl && ./scripts/install.sh
+
+then the widget:
+
     omarchy plugin add https://github.com/delarosa1312/omarchy-sony-xm5.git --enable
+
+Installing only the widget is not fatal, and not silent: it appears in the bar
+with no readings and says what is missing when you click it.
 
 ## Place it on the bar
 
