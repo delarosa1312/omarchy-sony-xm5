@@ -55,6 +55,13 @@ The probing tools remain, for looking at a device this does not yet understand:
        +── bar/omarchy-headphones   a plain Waybar-JSON script, kept as a
                                     fallback for bars without a plugin system
 
+The panel holds one socket to the daemon: commands go down it, and the daemon
+pushes state back up it on every change, so nothing polls. Measured, a command
+reaches the panel in about 19 ms through the CLI and under a millisecond over
+the panel's own socket. It used to take between a third of a second and a
+second and a half, spread across a process spawn per click, a 200 ms settle
+inside each write, a half-second publish tick and a 700 ms poll.
+
 The split exists because connecting is expensive and exclusive. A handshake
 costs several seconds and locks everyone else out, so a bar widget cannot open
 its own session: it would spend its life handshaking and would keep the phone
@@ -154,6 +161,30 @@ come back *unavailable*; equalizer, DSEE, connection mode, auto power off,
 wearing detection, auto pause, speak-to-chat and shutdown come back
 *available*. The widget hides anything unavailable rather than offering a
 control that cannot work.
+
+### The device does acknowledge every command
+
+`mdrHeadphonesSetPacketCallback` exposes the wire, and a frame is
+`[start][data type][seq][len:4][payload][checksum][end]`. Type 1 inbound is an
+ACK. One clear-bass write looks like this:
+
+    TX type 12   our command
+    RX type 1    the device acknowledging it
+    RX type 12   the device sending the new state back
+    TX type 1    us acknowledging that
+
+So writes were never unverifiable -- the answer was there from the first day
+and nothing was listening. The daemon now counts ACKs, ties each to the write
+it followed, and publishes `unacknowledged` for anything that got none.
+
+An ACK means the command **arrived**, not that the device honoured it: a preset
+write is acknowledged and ignored. Silence is the real failure signal.
+
+A command that goes unanswered is resent with the sequence bit flipped, and the
+library waits a full second before each retry -- the `FIXME-ACK Timeout` lines
+in `journalctl --user -u mdrctld`. The daemon counts those as `retransmits`.
+Every one observed so far succeeded on the second attempt, which points at a
+sequence-number desync rather than a flaky link. Not yet explained.
 
 ### How to tell whether a write actually landed
 
