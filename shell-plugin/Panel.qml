@@ -5,6 +5,7 @@ import Quickshell.Io
 import Quickshell.Bluetooth
 import qs.Commons
 import qs.Ui
+import "Model.js" as Model
 
 // Sony WH-1000XM5 panel.
 //
@@ -14,7 +15,7 @@ import qs.Ui
 // never try to open its own.
 Panel {
   id: root
-  moduleName: "delarosa.headphones"
+  moduleName: "io.github.delarosa1312.headphones"
   ipcTarget: ""            // the bar widget owns the IPC target
   manageIpc: false
 
@@ -33,38 +34,16 @@ Panel {
   // soon as the device agrees, or after a few seconds if it never does.
   property var pending: ({})
 
-  function eff(field, fallback) {
-    if (pending[field] !== undefined) return pending[field]
-    var v = state[field]
-    return v === undefined || v === null ? fallback : v
-  }
+  function eff(field, fallback) { return Model.effective(pending, state, field, fallback) }
 
   function claimField(field, value) {
-    var next = {}
-    for (var k in pending) next[k] = pending[k]
-    next[field] = value
-    pending = next
+    pending = Model.withClaim(pending, field, value)
     pendingSweep.restart()
   }
 
-  function sameValue(a, b) {
-    if (Array.isArray(a) && Array.isArray(b)) {
-      if (a.length !== b.length) return false
-      for (var i = 0; i < a.length; i++) if (Number(a[i]) !== Number(b[i])) return false
-      return true
-    }
-    return a === b
-  }
-
-  // Once the device agrees, stop overriding: from then on the panel shows what
-  // the headphones actually report, including changes made on the headset.
   function reconcile() {
-    var next = {}, changed = false
-    for (var k in pending) {
-      if (sameValue(pending[k], state[k])) changed = true
-      else next[k] = pending[k]
-    }
-    if (changed) pending = next
+    var next = Model.reconciled(pending, state)
+    if (next !== null) pending = next
   }
 
   // Whichever Sony device the daemon found. The setting is only a fallback
@@ -107,26 +86,10 @@ Panel {
   readonly property var batteries: state.batteries !== undefined ? state.batteries : []
   // Earbuds have three readings and the headline can only carry one, so say
   // the rest here. A single-battery headset has nothing to add.
-  readonly property string batteryParts: {
-    if (batteries.length < 2) return ""
-    var worn = [], rest = []
-    for (var i = 0; i < batteries.length; i++) {
-      var b = batteries[i]
-      var name = b.part === "left" ? "L" : b.part === "right" ? "R" : b.part
-      var text = name + " " + b.level + "%"
-      if (b.part === "left" || b.part === "right") worn.push(text)
-      else rest.push(text)
-    }
-    return worn.concat(rest).join("   ")
-  }
+  readonly property string batteryParts: Model.batteryParts(batteries)
   readonly property int ambientLevel: Number(eff("ambient_level", 0))
   readonly property int ambientMax: state.ambient_level_max !== undefined ? Number(state.ambient_level_max) : 20
-  // The buds answer "none" rather than staying silent, which is not a value
-  // worth a row: it says a button this device does not have is set to nothing.
-  readonly property string buttonMode: {
-    var v = state.button_mode !== undefined ? String(state.button_mode) : ""
-    return v === "none" ? "" : v
-  }
+  readonly property string buttonMode: Model.buttonMode(state.button_mode)
   // How many of the reported facts actually apply right now. Two or more earn
   // a header; one does not.
   readonly property int reportedCount:
@@ -175,18 +138,8 @@ Panel {
     state.self_mac !== undefined ? String(state.self_mac).toUpperCase() : ""
 
   function reconcileDevices() {
-    var next = {}, changed = false
-    for (var mac in busyDevices) {
-      var want = busyDevices[mac]
-      var found = null
-      for (var i = 0; i < devices.length; i++)
-        if (devices[i].mac === mac) found = devices[i]
-      var done = (want === "disconnect" && found && !found.connected)
-              || (want === "unpair" && !found)
-      if (done) changed = true
-      else next[mac] = want
-    }
-    if (changed) busyDevices = next
+    var next = Model.reconciledDevices(busyDevices, devices)
+    if (next !== null) busyDevices = next
   }
 
   onDevicesChanged: reconcileDevices()
@@ -205,31 +158,8 @@ Panel {
   // command. The protocol does ACK every command, so silence here is a real
   // failure rather than the usual missing echo.
   readonly property var unacknowledged: state.unacknowledged !== undefined ? state.unacknowledged : []
-  readonly property string unconfirmedText: {
-    if (unconfirmed.length === 0) return ""
-    var names = { mode: "noise mode", ambient_level: "ambient level",
-                  eq_preset: "equaliser", eq_bands: "bands",
-                  eq_clear_bass: "clear bass", dsee: "DSEE",
-                  audio_priority: "connection", listening: "listening mode",
-                  auto_power_off: "auto power off", wearing_power: "pause when removed",
-                  auto_pause: "auto pause" }
-    var out = []
-    for (var i = 0; i < unconfirmed.length; i++)
-      out.push(names[unconfirmed[i]] || unconfirmed[i])
-    return "Set, but not echoed back yet: " + out.join(", ") + "."
-  }
-
-  readonly property string unackedText: {
-    if (unacknowledged.length === 0) return ""
-    var names = { mode: "noise mode", ambient_level: "ambient level",
-                  eq_bands: "bands", eq_clear_bass: "clear bass", dsee: "DSEE",
-                  audio_priority: "connection", power_off: "switch off",
-                  auto_pause: "auto pause" }
-    var out = []
-    for (var i = 0; i < unacknowledged.length; i++)
-      out.push(names[unacknowledged[i]] || unacknowledged[i])
-    return "No answer from the headphones for: " + out.join(", ") + "."
-  }
+  readonly property string unconfirmedText: Model.unconfirmedText(unconfirmed)
+  readonly property string unackedText: Model.unacknowledgedText(unacknowledged)
 
   readonly property var eqPresets: [
     "off", "rock", "pop", "jazz", "dance", "edm", "r&b/hip-hop", "acoustic",
@@ -242,16 +172,8 @@ Panel {
   readonly property var powerOffChoices: [
     "when removed", "never", "5 min", "15 min", "30 min", "60 min", "180 min"
   ]
-  function powerOffLabel(value) {
-    if (value === "when-removed") return "when removed"
-    if (value === "never" || value === "") return "never"
-    return value + " min"
-  }
-  function powerOffValue(label) {
-    if (label === "when removed") return "when-removed"
-    if (label === "never") return "never"
-    return String(parseInt(label))
-  }
+  function powerOffLabel(value) { return Model.powerOffLabel(value) }
+  function powerOffValue(label) { return Model.powerOffValue(label) }
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -413,10 +335,7 @@ Panel {
   function deviceAction(action, mac) {
     if (!session) return
     if (!send(["device", action, mac])) return   // no spinner for a lost write
-    var next = {}
-    for (var k in busyDevices) next[k] = busyDevices[k]
-    next[mac] = action
-    busyDevices = next
+    busyDevices = Model.withDeviceAction(busyDevices, mac, action)
     deviceSweep.restart()
   }
 
@@ -957,8 +876,7 @@ Panel {
                 readonly property bool isSelf:
                   root.selfMac !== "" && String(modelData.mac).toUpperCase() === root.selfMac
                 readonly property bool canDisconnect: modelData.connected && !isSelf
-                readonly property string label:
-                  modelData.name && modelData.name !== "" ? modelData.name : modelData.mac
+                readonly property string label: Model.deviceLabel(modelData)
                 width: parent.width
                 implicitHeight: Math.max(devName.implicitHeight, actions.implicitHeight)
 
@@ -1118,14 +1036,7 @@ Panel {
           spacing: Style.space(10)
 
           Repeater {
-            model: {
-              var keys = [["n/a/o", "modes"], ["c", "cycle"]]
-              if (root.has("dsee")) keys.push(["d", "dsee"])
-              if (root.has("auto_pause")) keys.push(["p", "pause"])
-              if (root.hasMultipoint) keys.push(["m", "multipoint"])
-              if (root.has("equalizer")) keys.push(["e", "equaliser"], ["z", "undo"])
-              return keys
-            }
+            model: Model.shortcutHints(root.has, root.hasMultipoint)
 
             Row {
               id: keyHint

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Everything that can be checked without headphones on your head.
+set -uo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+status=0
+
+echo "== daemon and protocol (python) =="
+python3 -m unittest discover -s tests -q || status=1
+
+echo
+echo "== panel logic (node) =="
+if command -v node >/dev/null; then
+  if node tests/model.test.js > /tmp/mdrctl-model-test.log 2>&1; then
+    grep -E "^# (tests|pass|fail)" /tmp/mdrctl-model-test.log
+  else
+    cat /tmp/mdrctl-model-test.log
+    status=1
+  fi
+else
+  echo "node not installed -- skipped"
+fi
+
+echo
+echo "== plugin manifest and QML =="
+omarchy plugin validate "$ROOT/shell-plugin" && echo "manifest ok" || status=1
+# Any file with an IpcHandler makes qmllint exit 255, Omarchy's own included,
+# so only the panel is linted -- the one where a mistake would be ours.
+qmllint -I "${OMARCHY_PATH:-/usr/share/omarchy}/shell" "$ROOT/shell-plugin/Panel.qml" \
+  && echo "Panel.qml lints clean" || status=1
+
+exit $status

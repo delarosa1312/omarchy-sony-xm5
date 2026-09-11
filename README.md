@@ -40,7 +40,7 @@ offers the MDR service, so a second Sony pair works the first time it is put
 on. Set `MDR_MAC` only to pin it to one, which matters solely when two are
 connected at once.
 
-    python3 -m unittest discover -s tests   # no headphones required
+    ./scripts/test                       # no headphones required
 
 **Stop the daemon before using Sony's app**, on the phone or anywhere else. The
 device allows one control session at a time and the daemon holds it:
@@ -88,13 +88,13 @@ command widget can only print a line and run a command on click -- it cannot
 open anything.
 
     ./scripts/sync-plugin.sh push      # repo -> ~/.config/omarchy/plugins/
-    omarchy plugin enable delarosa.headphones
+    omarchy plugin enable io.github.delarosa1312.headphones
 
 The shell hot-reloads plugin *files*, but the QML engine goes on serving the
 component it already compiled, so a change needs `omarchy restart shell`. The
 push script does that for you.
 
-Edit the copy under `~/.config/omarchy/plugins/delarosa.headphones/` and run
+Edit the copy under `~/.config/omarchy/plugins/io.github.delarosa1312.headphones/` and run
 `./scripts/sync-plugin.sh` to bring it back here.
 
 The panel takes battery and connected state from BlueZ through
@@ -116,12 +116,21 @@ part that needs the session.
 
 ## Tests
 
+    ./scripts/test
+
 `tests/test_mdrctl.py` covers the things that were wrong once: the equaliser's
 two halves staged before a single commit, discovery picking a connected
-MDR device and nothing else, and a claimed value surviving the device's own
-late echo of it. All of it runs without headphones, BlueZ or libmdr, because
-none of those bugs were hardware problems -- and none of them were visible in
-the panel either, which is the point.
+MDR device and nothing else, a claimed value surviving the device's own late
+echo of it, and which battery stands for a pair of earbuds.
+
+`tests/model.test.js` covers the panel's own logic, which lives in
+`shell-plugin/Model.js` for exactly that reason -- extracting it immediately
+turned up a bug where the earbud readings were printed in whatever order the
+device answered in.
+
+Neither needs headphones, BlueZ or libmdr, because none of those bugs were
+hardware problems -- and none of them were visible in the panel either, which
+is the point. The script also runs `omarchy plugin validate` and `qmllint`.
 
 ## Status
 
