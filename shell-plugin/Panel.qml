@@ -697,29 +697,29 @@ Panel {
         }
 
         // ---- connection ----------------------------------------------------
-        Column {
+        // Shown, not offered. The command is sent and the device acknowledges
+        // it within 25 ms, then keeps the old value -- same as the equaliser
+        // presets. Two controls now known to be accepted and discarded.
+        Item {
           width: parent.width
-          spacing: Style.space(8)
           visible: root.session && root.audioPriority !== "" && root.has("connection_mode")
+          implicitHeight: connLabel.implicitHeight
 
-          PanelSectionHeader {
-            text: "CONNECTION"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
+          Text {
+            id: connLabel
+            anchors.left: parent.left
+            text: "Connection"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
           }
 
-          ButtonGroup {
-            width: parent.width
-            foreground: root.foreground
-            background: root.background
-            accent: root.accent
-            fontFamily: root.fontFamily
-            options: [
-              { value: "quality", label: "Quality", tooltip: "Ask for LDAC's higher bitrate" },
-              { value: "stability", label: "Stability", tooltip: "Drop the bitrate to keep the link" }
-            ]
-            value: root.audioPriority
-            onChanged: function(v) { root.setPriority(v) }
+          Text {
+            anchors.right: parent.right
+            text: root.audioPriority === "quality" ? "sound quality" : root.audioPriority
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
           }
         }
 

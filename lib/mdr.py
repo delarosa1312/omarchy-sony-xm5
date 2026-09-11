@@ -537,12 +537,17 @@ class Headphones:
             self.pump(20)
         return pw
 
-    def shutdown(self):
-        """Ask the headphones to switch off. The link dies with them, so the
-        caller should expect the session to end rather than stay usable."""
+    def shutdown(self, settle=0.6):
+        """Ask the headphones to switch off.
+
+        The settle is not optional here. Every other write can leave the frame
+        for the session's own loop to flush, but this one is followed by
+        tearing the session down, so with no pumping the command never leaves
+        the machine -- which is exactly how "switch off" came to do nothing.
+        """
         pw = self.get_power()
         pw.shutdown_requested = 1
-        return self.set_power(pw)
+        return self.set_power(pw, settle=settle)
 
     def get_listening(self):
         ls = Listening()

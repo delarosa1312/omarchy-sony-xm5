@@ -138,8 +138,8 @@ truthy reports every idle headphone as charging.
 | NoiseControl | fully decoded | **works** (confirmed by ear, survives a reconnect) |
 | EqualizerBands + clear bass | 5 bands, -10..+10 | **works** (verified by reconnect) |
 | Equalizer preset | works | **accepted and ignored** |
-| ConnectionMode | quality / stability | untested |
-| Power | auto power off, wearing, auto pause | untested; see the model note below |
+| ConnectionMode | quality / stability | **acknowledged and ignored** |
+| Power | auto power off, wearing, auto pause | **works** (auto power off verified) |
 | Listening | returns data | feature probe says *unavailable* on the XM5 |
 | PairedDevices | 6 devices with MAC and name | not wired up |
 | SpeakToChat, VoiceGuidance | return data | not wired up |
@@ -211,6 +211,18 @@ consequences, both found by watching values drift:
 Preset is a separate message and is sent unconditionally, yet the device
 ignores it: tested with two different presets, each checked from a fresh
 session. So the widget shows the preset and does not offer to change it.
+
+**Connection priority behaves the same way.** The frame goes out, the device
+acknowledges it 25 ms later, and a fresh session still reads the old value.
+Two controls now known to be accepted and discarded, both shown read-only.
+An ACK really does mean only that the command arrived.
+
+### Switching off needs a settle, uniquely
+
+Every other write can leave its frame for the session's own loop to flush.
+`shutdown` cannot: it is followed by tearing the session down, so with no
+pumping the command never leaves the machine. That is exactly why the "switch
+off" button did nothing.
 
 ### Auto power off is one setting, not two
 
