@@ -71,40 +71,41 @@ truthy reports every idle headphone as charging.
 Use `./tools/dump.py --expect N` to map an unknown field: it flags any byte
 close to a value you can verify on the headphones themselves.
 
-### Noise control: reading solved, writing is asymmetric
+### Noise control: reads and writes both work, but do not confirm each other
 
-The struct decodes cleanly from the header — mode, ambient level, focus on
-voice, button behaviour, adaptive ambient and its sensitivity — and matches
-what the headphones report.
+The struct decodes cleanly from the header and matches what the headphones
+report.
 
-Writing **reaches the device and is audible**, confirmed by ear:
+**Writing works in both directions.** Both `cancelling -> ambient` and
+`ambient -> cancelling` were confirmed audibly by the person wearing them. The
+state also survives disconnecting and reconnecting, so it is stored on the
+device.
 
-- `cancelling -> ambient` works. The wearer hears it. The state also survives
-  disconnecting and reconnecting the control session, so it is written to the
-  headphones rather than held in the library.
-- `ambient -> cancelling` does **not** work. `set` and `commit` both return OK
-  and the dirty flag sets, but the device never echoes the new mode and the
-  sound does not change — verified by polling for a full 60 seconds.
+**Reading works too, for changes made on the headphones.** `tools/watch.py`
+held the link while the button was pressed nine times, and every transition
+appeared within one to three seconds.
 
-So the earlier "maybe it applies late" theory is dead, and so is "it reverts
-when the session drops". The asymmetry is real.
+**But a session is not reliably told about its own writes.** After writing a
+mode, the cached state often keeps reporting the old one — for a full 60
+seconds in one case, while the headphones had audibly changed. This is what
+made a working write look like a rejected one, twice, and it is the single
+biggest trap in this API.
 
-**Reading during a session is reliable** — proven with `tools/watch.py` by
-pressing the button on the headphones repeatedly: every single change was
-picked up, with roughly one to three seconds of latency. So a stale read does
-not explain the failed write; the write really is being rejected while
-reporting success.
+Consequences for anything built on top:
 
-The same latency applies to our own writes, so a confirm loop must be patient
-and the daemon should stream state rather than block on each write.
+- never block on a read-back to confirm a write; treat a successful `set` plus
+  `commit` as done
+- to verify the true state after writing, reconnect — a fresh session always
+  reads correctly
+- a widget should show the mode it just requested, and let the event stream
+  correct it if the user presses the button
 
 Recovery if a device is left in the wrong mode: the button on the headphones
 cycles modes, per `button_mode`.
 
-Ideas to try next, in order: send `mode = off` before `cancelling`; check
-whether `ambient_level` or `focus_on_voice` must be cleared when leaving
-ambient; compare against the packets the GUI client sends for the same change
-(`mdrHeadphonesSetPacketCallback` exists for exactly this).
+Still unexplained: why self-initiated changes are not echoed while button
+presses are. `mdrHeadphonesSetPacketCallback` exists for watching the wire and
+would answer it.
 
 Then a daemon holding the link plus a thin CLI (`mdrctl watch`), then the bar
 widget.
