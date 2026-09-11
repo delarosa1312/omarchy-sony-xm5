@@ -930,7 +930,7 @@ Panel {
                     // turning glyph, so a click that is doing something slow
                     // cannot be mistaken for one that did nothing.
                     text: deviceRow.busy ? "" : (deviceRow.modelData.connected ? "Disconnect" : "Connect")
-                    iconText: deviceRow.busy ? "\U000f0450" : "\U000f00af"
+                    iconText: deviceRow.busy ? "󰑐" : "󰂯"
                     iconSpinning: deviceRow.busy
                     enabled: !deviceRow.busy
                     bordered: true
@@ -949,7 +949,7 @@ Panel {
                   PanelActionButton {
                     // Same glyph Omarchy's own Bluetooth panel uses to forget
                     // a device, so it reads the way the rest of the shell does.
-                    iconText: "\U000f0159"
+                    iconText: "󰅙"
                     tooltipText: "Remove this pairing from the headphones"
                     visible: !deviceRow.modelData.playback
                     enabled: !deviceRow.busy

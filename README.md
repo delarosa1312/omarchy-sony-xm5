@@ -232,6 +232,14 @@ this; BlueZ is the one that knows. The daemon now asks it every few seconds
 while it believes it has a session, and drops the session when the device goes
 away.
 
+### QML has no five-hex escape
+
+`"\\U000f00af"` is not an escape sequence in QML -- it renders as that literal
+text, which is exactly what the icon buttons showed. Only `\\uXXXX` (four hex)
+works, and every glyph worth having here lives above U+FFFF. Write the
+character itself into the file, as Omarchy's own panels do. This has now cost
+two rounds; the giveaway is a button reading `U000f00af`.
+
 ### Seeing the headset's other connections
 
 `mdrHeadphonesGetPairedDevices` returns what the headset itself is talking to,
