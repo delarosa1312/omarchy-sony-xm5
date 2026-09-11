@@ -291,6 +291,39 @@ class ClaimTest(unittest.TestCase):
         self.assertEqual(out["unacknowledged"], [])
 
 
+class BatteryTest(unittest.TestCase):
+    """One number has to stand for a device with three batteries."""
+
+    def test_a_headset_has_only_one_battery_to_pick(self):
+        picked = mdrctld.headline_battery([{"part": "main", "level": 57, "charging": "no"}])
+        self.assertEqual(picked["level"], 57)
+
+    def test_earbuds_report_the_emptier_of_the_two_being_worn(self):
+        picked = mdrctld.headline_battery([
+            {"part": "left", "level": 100, "charging": "no"},
+            {"part": "right", "level": 40, "charging": "no"},
+            {"part": "case", "level": 71, "charging": "no"},
+        ])
+        self.assertEqual(picked["level"], 40,
+                         "the right bud is what ends the listening, not the left")
+
+    def test_the_case_never_stands_for_the_buds(self):
+        """It is charged and sitting in a pocket; it says nothing about how
+        long the music lasts."""
+        picked = mdrctld.headline_battery([
+            {"part": "left", "level": 80, "charging": "no"},
+            {"part": "right", "level": 80, "charging": "no"},
+            {"part": "case", "level": 5, "charging": "no"},
+        ])
+        self.assertEqual(picked["level"], 80)
+
+    def test_a_case_on_its_own_is_not_a_reading(self):
+        self.assertIsNone(mdrctld.headline_battery([{"part": "case", "level": 71}]))
+
+    def test_nothing_reported_is_not_an_error(self):
+        self.assertIsNone(mdrctld.headline_battery([]))
+
+
 class ExplainTest(unittest.TestCase):
     """The transport says EBUSY; the user needs to know the headset only has
     one control channel and something else is holding it."""

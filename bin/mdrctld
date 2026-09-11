@@ -83,6 +83,19 @@ def bluez_devices():
     return found
 
 
+def headline_battery(batteries):
+    """The one reading that stands for the device.
+
+    A headset has a single battery and there is nothing to choose. Earbuds
+    report three, and the one that ends the listening is the emptier of the two
+    being worn -- so never the first in the list, which is the left bud and
+    would quietly hide a right one about to die, and never the case, which is
+    not being worn at all.
+    """
+    worn = [b for b in batteries if b.get("part") in ("main", "left", "right")]
+    return min(worn, key=lambda b: b["level"]) if worn else None
+
+
 def find_headphones(pinned=""):
     """The connected device that speaks MDR. Recognising the headphones by the
     service they offer rather than by a hard-coded address means a pair this
@@ -319,8 +332,7 @@ class Daemon:
                            "level": b.level_percent,
                            "charging": mdr.CHARGING.get(b.charging, b.charging)}
                           for b in batteries]
-        main = next((b for b in s["batteries"] if b["part"] == "main"), None) or \
-            (s["batteries"][0] if s["batteries"] else None)
+        main = headline_battery(s["batteries"])
         s["battery"] = main["level"] if main else self.bluez_battery()
         s["charging"] = main["charging"] if main else None
         s["battery_source"] = "mdr" if main else "bluez"

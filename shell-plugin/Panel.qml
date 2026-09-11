@@ -104,9 +104,29 @@ Panel {
   readonly property int battery: fresh && state.battery !== undefined && state.battery !== null
     ? Number(state.battery) : bluezBattery
   readonly property bool charging: String(state.charging) === "yes"
+  readonly property var batteries: state.batteries !== undefined ? state.batteries : []
+  // Earbuds have three readings and the headline can only carry one, so say
+  // the rest here. A single-battery headset has nothing to add.
+  readonly property string batteryParts: {
+    if (batteries.length < 2) return ""
+    var worn = [], rest = []
+    for (var i = 0; i < batteries.length; i++) {
+      var b = batteries[i]
+      var name = b.part === "left" ? "L" : b.part === "right" ? "R" : b.part
+      var text = name + " " + b.level + "%"
+      if (b.part === "left" || b.part === "right") worn.push(text)
+      else rest.push(text)
+    }
+    return worn.concat(rest).join("   ")
+  }
   readonly property int ambientLevel: Number(eff("ambient_level", 0))
   readonly property int ambientMax: state.ambient_level_max !== undefined ? Number(state.ambient_level_max) : 20
-  readonly property string buttonMode: state.button_mode !== undefined ? String(state.button_mode) : ""
+  // The buds answer "none" rather than staying silent, which is not a value
+  // worth a row: it says a button this device does not have is set to nothing.
+  readonly property string buttonMode: {
+    var v = state.button_mode !== undefined ? String(state.button_mode) : ""
+    return v === "none" ? "" : v
+  }
   // How many of the reported facts actually apply right now. Two or more earn
   // a header; one does not.
   readonly property int reportedCount:
@@ -531,7 +551,7 @@ Panel {
           title: root.model
           meta: {
             if (root.battery < 0) return root.session ? "Connected" : "No control session"
-            var t = root.battery + "%"
+            var t = root.batteryParts !== "" ? root.batteryParts : root.battery + "%"
             if (root.charging) t += "  ·  charging"
             if (!root.session) t += "  ·  battery only"
             return t
