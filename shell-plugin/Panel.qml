@@ -122,6 +122,34 @@ Panel {
   readonly property var othersConnected: state.others_connected !== undefined ? state.others_connected : []
   property bool devicesExpanded: false
 
+  // Device actions have no value to claim, so they get their own in-flight
+  // map: MAC -> the action we asked for. An entry clears when the headset's
+  // own list shows the action happened, which is the only honest signal.
+  property var busyDevices: ({})
+  property string removeMac: ""
+  property string removeName: ""
+
+  function waiting(field) { return pending[field] !== undefined }
+  function deviceBusy(mac) { return busyDevices[mac] !== undefined }
+
+  function reconcileDevices() {
+    var next = {}, changed = false
+    for (var mac in busyDevices) {
+      var want = busyDevices[mac]
+      var found = null
+      for (var i = 0; i < devices.length; i++)
+        if (devices[i].mac === mac) found = devices[i]
+      var done = (want === "connect" && found && found.connected)
+              || (want === "disconnect" && found && !found.connected)
+              || (want === "unpair" && !found)
+      if (done) changed = true
+      else next[mac] = want
+    }
+    if (changed) busyDevices = next
+  }
+
+  onDevicesChanged: reconcileDevices()
+
   // Only show what this device actually advertises. A control for something it
   // does not support is worse than no control: the write is accepted, committed
   // locally and never sent, so the button looks like it worked.
@@ -330,7 +358,21 @@ Panel {
   }
   function setAutoPause(on) { if (session) send(["auto-pause", on ? "on" : "off"], "auto_pause", on) }
   function setMultipoint(on) { if (session) send(["multipoint", on ? "on" : "off"], "multipoint", on) }
-  function deviceAction(action, mac) { if (session) send(["device", action, mac]) }
+  function deviceAction(action, mac) {
+    if (!session) return
+    var next = {}
+    for (var k in busyDevices) next[k] = busyDevices[k]
+    next[mac] = action
+    busyDevices = next
+    deviceSweep.restart()
+    send(["device", action, mac])
+  }
+
+  function askRemove(mac, name) {
+    removeMac = mac
+    removeName = name
+    removeConfirm.opened = true
+  }
 
   function startDaemon() {
     daemonCmd.command = ["systemctl", "--user", "start", "mdrctld"]
@@ -387,6 +429,13 @@ Panel {
   }
 
   Timer {
+    // An action the headset never reflects would otherwise spin forever.
+    id: deviceSweep
+    interval: 10000
+    onTriggered: root.busyDevices = ({})
+  }
+
+  Timer {
     // A claim the device never contradicts would otherwise stick forever.
     id: pendingSweep
     interval: 5000
@@ -411,7 +460,10 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      onCloseRequested: root.close()
+      onCloseRequested: {
+        if (removeConfirm.opened) removeConfirm.opened = false
+        else root.close()
+      }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         var k = String(t).toLowerCase()
@@ -486,6 +538,7 @@ Panel {
               { value: "off", label: "Off", tooltip: "Neither  (o)" }
             ]
             value: root.mode
+            opacity: root.waiting("mode") ? 0.55 : 1.0
             onChanged: function(v) { root.setMode(v) }
           }
 
@@ -832,6 +885,7 @@ Panel {
 
             Toggle {
               width: parent.width
+              opacity: root.waiting("multipoint") ? 0.55 : 1.0
               label: "Multipoint"
               description: "Stay connected to two devices at once"
               checked: root.multipoint
@@ -844,36 +898,67 @@ Panel {
               model: root.devices
 
               Item {
+                id: deviceRow
                 required property var modelData
+                readonly property bool busy: root.deviceBusy(modelData.mac)
                 width: parent.width
-                implicitHeight: Math.max(devName.implicitHeight, devButton.implicitHeight)
+                implicitHeight: Math.max(devName.implicitHeight, actions.implicitHeight)
 
                 Text {
                   id: devName
                   anchors.left: parent.left
                   anchors.verticalCenter: parent.verticalCenter
-                  width: parent.width - devButton.width - Style.space(12)
-                  text: (modelData.name && modelData.name !== "" ? modelData.name : modelData.mac)
-                        + (modelData.playback ? "  \u00b7  playing" : "")
-                  color: modelData.connected ? root.foreground : root.dim
+                  width: parent.width - actions.width - Style.space(10)
+                  text: (deviceRow.modelData.connected ? "\u25cf  " : "\u25cb  ")
+                        + (deviceRow.modelData.name && deviceRow.modelData.name !== ""
+                           ? deviceRow.modelData.name : deviceRow.modelData.mac)
+                        + (deviceRow.modelData.playback ? "  \u00b7  playing" : "")
+                  color: deviceRow.modelData.connected ? root.foreground : root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
                   elide: Text.ElideRight
                 }
 
-                Button {
-                  id: devButton
+                Row {
+                  id: actions
                   anchors.right: parent.right
                   anchors.verticalCenter: parent.verticalCenter
-                  text: modelData.connected ? "Disconnect" : "Connect"
-                  bordered: true
-                  fontSize: Style.font.bodySmall
-                  foreground: root.foreground
-                  background: root.background
-                  accent: root.accent
-                  fontFamily: root.fontFamily
-                  onClicked: root.deviceAction(modelData.connected ? "disconnect" : "connect",
-                                               modelData.mac)
+                  spacing: Style.space(6)
+
+                  Button {
+                    // While the action is in flight the label gives way to a
+                    // turning glyph, so a click that is doing something slow
+                    // cannot be mistaken for one that did nothing.
+                    text: deviceRow.busy ? "" : (deviceRow.modelData.connected ? "Disconnect" : "Connect")
+                    iconText: deviceRow.busy ? "\U000f0450" : "\U000f00af"
+                    iconSpinning: deviceRow.busy
+                    enabled: !deviceRow.busy
+                    bordered: true
+                    fontSize: Style.font.bodySmall
+                    foreground: root.foreground
+                    background: root.background
+                    accent: root.accent
+                    fontFamily: root.fontFamily
+                    tooltipText: deviceRow.modelData.connected
+                      ? "Disconnect from the headphones" : "Connect to the headphones"
+                    onClicked: root.deviceAction(
+                      deviceRow.modelData.connected ? "disconnect" : "connect",
+                      deviceRow.modelData.mac)
+                  }
+
+                  PanelActionButton {
+                    // Same glyph Omarchy's own Bluetooth panel uses to forget
+                    // a device, so it reads the way the rest of the shell does.
+                    iconText: "\U000f0159"
+                    tooltipText: "Remove this pairing from the headphones"
+                    visible: !deviceRow.modelData.playback
+                    enabled: !deviceRow.busy
+                    foreground: root.foreground
+                    hoverColor: root.urgent
+                    fontFamily: root.fontFamily
+                    onClicked: root.askRemove(deviceRow.modelData.mac,
+                                              deviceRow.modelData.name || deviceRow.modelData.mac)
+                  }
                 }
               }
             }
@@ -945,6 +1030,25 @@ Panel {
         }
       }
       }
+
+      // Unpairing is the one thing here that cannot be undone from this panel:
+      // the device has to be paired again from the other end.
+      ConfirmDialog {
+        id: removeConfirm
+        anchors.fill: parent
+        z: 10
+        message: "Remove " + root.removeName + " from the headphones?"
+        confirmText: "Remove"
+        background: root.background
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onConfirmed: {
+          removeConfirm.opened = false
+          root.deviceAction("unpair", root.removeMac)
+        }
+        onCanceled: removeConfirm.opened = false
+      }
+
     }
   }
 
