@@ -71,27 +71,36 @@ truthy reports every idle headphone as charging.
 Use `./tools/dump.py --expect N` to map an unknown field: it flags any byte
 close to a value you can verify on the headphones themselves.
 
-### Noise control: reading solved, writing not yet
+### Noise control: reading solved, writing is asymmetric
 
 The struct decodes cleanly from the header — mode, ambient level, focus on
 voice, button behaviour, adaptive ambient and its sensitivity — and matches
 what the headphones report.
 
-Writing is **not trustworthy yet**:
+Writing **reaches the device and is audible**, confirmed by ear:
 
-- cancelling -> ambient is accepted and echoed back by the device, reliably
-- ambient -> cancelling was accepted (`set` and `commit` both return OK, the
-  dirty flag sets) but the device did not echo the new mode back within ten
-  seconds, twice
+- `cancelling -> ambient` works. The wearer hears it. The state also survives
+  disconnecting and reconnecting the control session, so it is written to the
+  headphones rather than held in the library.
+- `ambient -> cancelling` does **not** work. `set` and `commit` both return OK
+  and the dirty flag sets, but the device never echoes the new mode and the
+  sound does not change — verified by polling for a full 60 seconds.
 
-Between sessions the headphones were found back on cancelling, so the write may
-apply late, or the mode may revert when the control session drops, or it was
-changed by the button on the headphones. Not yet distinguished.
+So the earlier "maybe it applies late" theory is dead, and so is "it reverts
+when the session drops". The asymmetry is real.
 
-Until that is understood, do not rely on `set_noise_mode`, and do not run it
-against headphones someone is wearing without telling them first.
+Note the echo is slow even when it works: after a successful write the device
+kept reporting the old mode for several seconds before updating. Any confirm
+loop needs to be patient, and the daemon should stream state rather than block
+on a write.
 
-Next: work out why the reverse write does not confirm — likely candidates are
-an extra required field, a commit that needs different sequencing, or a stale
-cached read. Then a daemon holding the link plus a thin CLI (`mdrctl watch`),
-then the bar widget.
+Recovery if a device is left in the wrong mode: the button on the headphones
+cycles modes, per `button_mode`.
+
+Ideas to try next, in order: send `mode = off` before `cancelling`; check
+whether `ambient_level` or `focus_on_voice` must be cleared when leaving
+ambient; compare against the packets the GUI client sends for the same change
+(`mdrHeadphonesSetPacketCallback` exists for exactly this).
+
+Then a daemon holding the link plus a thin CLI (`mdrctl watch`), then the bar
+widget.
