@@ -302,6 +302,9 @@ class Daemon:
             devices = self.hp.paired_devices()
             s["devices"] = devices
             mine = self.adapter_mac()
+            # Published so the panel can tell this machine's row apart and
+            # withhold the actions that would cut its own link.
+            s["self_mac"] = mine
             s["others_connected"] = sorted(
                 d["name"] or d["mac"] for d in devices
                 if d["connected"] and d["mac"].upper() not in (MAC.upper(), mine))

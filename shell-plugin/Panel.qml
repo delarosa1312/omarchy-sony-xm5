@@ -132,6 +132,13 @@ Panel {
   function waiting(field) { return pending[field] !== undefined }
   function deviceBusy(mac) { return busyDevices[mac] !== undefined }
 
+  // This machine's own row. Disconnecting or unpairing it would cut the link
+  // the panel itself talks over, so those two actions are withheld there.
+  // From the daemon, which asks BlueZ. Quickshell's BluetoothAdapter does not
+  // carry an address -- only its devices do.
+  readonly property string selfMac:
+    state.self_mac !== undefined ? String(state.self_mac).toUpperCase() : ""
+
   function reconcileDevices() {
     var next = {}, changed = false
     for (var mac in busyDevices) {
@@ -139,8 +146,7 @@ Panel {
       var found = null
       for (var i = 0; i < devices.length; i++)
         if (devices[i].mac === mac) found = devices[i]
-      var done = (want === "connect" && found && found.connected)
-              || (want === "disconnect" && found && !found.connected)
+      var done = (want === "disconnect" && found && !found.connected)
               || (want === "unpair" && !found)
       if (done) changed = true
       else next[mac] = want
@@ -902,6 +908,9 @@ Panel {
                 required property var modelData
                 readonly property bool busy: root.deviceBusy(modelData.mac)
                 readonly property bool isPlaying: modelData.playback === true
+                readonly property bool isSelf:
+                  root.selfMac !== "" && String(modelData.mac).toUpperCase() === root.selfMac
+                readonly property bool canDisconnect: modelData.connected && !isSelf
                 readonly property string label:
                   modelData.name && modelData.name !== "" ? modelData.name : modelData.mac
                 width: parent.width
@@ -945,9 +954,10 @@ Panel {
 
                   PanelToolTip {
                     visible: rowHover.containsMouse
-                    text: deviceRow.isPlaying ? "Connected, and playing"
+                    text: deviceRow.isSelf ? "This computer"
+                          : deviceRow.isPlaying ? "Connected, and playing"
                           : deviceRow.modelData.connected ? "Connected to the headphones"
-                          : "Not connected"
+                          : "Not connected -- start the connection from the device itself"
                     fontFamily: root.fontFamily
                   }
                 }
@@ -958,36 +968,42 @@ Panel {
                   anchors.verticalCenter: parent.verticalCenter
                   spacing: Style.space(6)
 
-                  Button {
-                    // Fixed width, so Connect and Disconnect leave the remove
-                    // buttons in one column instead of a ragged edge.
-                    width: Style.space(116)
-                    text: deviceRow.busy ? "" : (deviceRow.modelData.connected ? "Disconnect" : "Connect")
-                    iconText: deviceRow.busy ? "󰑐" : "󰂯"
-                    iconSpinning: deviceRow.busy
-                    enabled: !deviceRow.busy
-                    bordered: true
-                    fontSize: Style.font.bodySmall
+                  // No Connect: the headset cannot dial out to a paired device,
+                  // here or in Sony's own app. Both actions are icons of the
+                  // same size, so the column stays straight whatever the row.
+                  PanelActionButton {
+                    iconText: deviceRow.busy ? "󰑐" : "󰂲"
+                    tooltipText: deviceRow.isSelf
+                      ? "This computer -- disconnect it from Bluetooth instead"
+                      : "Disconnect from the headphones"
+                    opacity: deviceRow.canDisconnect ? 1 : 0
+                    enabled: deviceRow.canDisconnect && !deviceRow.busy
                     foreground: root.foreground
-                    background: root.background
-                    accent: root.accent
+                    hoverColor: root.accent
                     fontFamily: root.fontFamily
-                    tooltipText: deviceRow.modelData.connected
-                      ? "Disconnect from the headphones" : "Connect to the headphones"
-                    onClicked: root.deviceAction(
-                      deviceRow.modelData.connected ? "disconnect" : "connect",
-                      deviceRow.modelData.mac)
+                    onClicked: root.deviceAction("disconnect", deviceRow.modelData.mac)
+
+                    RotationAnimation on rotation {
+                      from: 0
+                      to: 360
+                      duration: 900
+                      loops: Animation.Infinite
+                      alwaysRunToEnd: true
+                      running: deviceRow.busy
+                    }
                   }
 
                   // Kept in the layout even when it cannot be used, so every
                   // row is the same width and the column stays straight.
                   PanelActionButton {
                     iconText: "󰅙"
-                    tooltipText: deviceRow.isPlaying
-                      ? "The device playing cannot be removed from here"
-                      : "Remove this pairing from the headphones"
-                    opacity: deviceRow.isPlaying ? 0 : 1
-                    enabled: !deviceRow.isPlaying && !deviceRow.busy
+                    tooltipText: deviceRow.isSelf
+                      ? "This computer -- unpair it from Bluetooth instead"
+                      : deviceRow.isPlaying
+                        ? "The device playing cannot be removed from here"
+                        : "Remove this pairing from the headphones"
+                    opacity: (deviceRow.isPlaying || deviceRow.isSelf) ? 0 : 1
+                    enabled: !deviceRow.isPlaying && !deviceRow.isSelf && !deviceRow.busy
                     foreground: root.foreground
                     hoverColor: root.urgent
                     fontFamily: root.fontFamily
