@@ -238,6 +238,14 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property string glyph: "󰋋"
+  // One column for whatever sits left of a label -- disclosure triangles,
+  // device status dots -- so every label in the panel starts on the same edge
+  // no matter what precedes it. Glued to the text instead, a triangle pushed
+  // its label three characters right and gave the panel a fourth left edge.
+  // Matched to what Omarchy's own boxed controls inset their label by, so a
+  // device name and the word "Multipoint" above it start on the same edge.
+  // Near-but-not-equal reads worse than plainly different.
+  readonly property real gutter: Style.spacing.rowPaddingX + Style.space(2)
   readonly property string modeTag: mode === "cancelling" ? "NC"
     : mode === "ambient" ? "AMB"
     : mode === "off" ? "OFF" : ""
@@ -633,10 +641,21 @@ Panel {
             implicitHeight: Math.max(eqHeader.implicitHeight, eqValue.implicitHeight)
 
             Text {
-              id: eqHeader
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
-              text: (root.eqExpanded ? "\u25be  " : "\u25b8  ") + "Equaliser"
+              width: root.gutter
+              text: root.eqExpanded ? "\u25be" : "\u25b8"
+              color: eqMouse.containsMouse ? root.foreground : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              id: eqHeader
+              anchors.left: parent.left
+              anchors.leftMargin: root.gutter
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Equaliser"
               color: eqMouse.containsMouse ? root.foreground : root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
@@ -841,10 +860,21 @@ Panel {
             implicitHeight: Math.max(devHeader.implicitHeight, devValue.implicitHeight)
 
             Text {
-              id: devHeader
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
-              text: (root.devicesExpanded ? "\u25be  " : "\u25b8  ") + "Devices"
+              width: root.gutter
+              text: root.devicesExpanded ? "\u25be" : "\u25b8"
+              color: devMouse.containsMouse ? root.foreground : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              id: devHeader
+              anchors.left: parent.left
+              anchors.leftMargin: root.gutter
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Devices"
               color: devMouse.containsMouse ? root.foreground : root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
@@ -914,7 +944,7 @@ Panel {
                   id: statusDot
                   anchors.left: parent.left
                   anchors.verticalCenter: parent.verticalCenter
-                  width: Style.space(16)
+                  width: root.gutter
                   text: deviceRow.isPlaying ? "\u25c9" : (deviceRow.modelData.connected ? "\u25cf" : "\u25cb")
                   color: deviceRow.modelData.connected ? root.foreground : root.dim
                   font.family: root.fontFamily
@@ -1018,8 +1048,6 @@ Panel {
           wrapMode: Text.WordWrap
         }
 
-        PanelSeparator { foreground: root.foreground }
-
         // ---- detail ------------------------------------------------------
         // Things the headset tells us about itself. None of them are settable
         // from here, which the header says once rather than each row saying it.
@@ -1055,21 +1083,41 @@ Panel {
         // ---- keys ----------------------------------------------------------
         // A shortcut nobody can see is a shortcut nobody uses. One dim line
         // costs less than a hint on every control.
-        Text {
+        Flow {
           width: parent.width
           visible: root.session
-          text: {
-            var keys = ["n/a/o  modes", "c  cycle"]
-            if (root.has("dsee")) keys.push("d  dsee")
-            if (root.has("auto_pause")) keys.push("p  pause")
-            if (root.hasMultipoint) keys.push("m  multipoint")
-            if (root.has("equalizer")) keys.push("e  equaliser", "z  undo")
-            return keys.join("     ")
+          spacing: Style.space(10)
+
+          Repeater {
+            model: {
+              var keys = [["n/a/o", "modes"], ["c", "cycle"]]
+              if (root.has("dsee")) keys.push(["d", "dsee"])
+              if (root.has("auto_pause")) keys.push(["p", "pause"])
+              if (root.hasMultipoint) keys.push(["m", "multipoint"])
+              if (root.has("equalizer")) keys.push(["e", "equaliser"], ["z", "undo"])
+              return keys
+            }
+
+            Row {
+              id: keyHint
+              required property var modelData
+              spacing: Style.space(5)
+
+              Text {
+                text: keyHint.modelData[0]
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Text {
+                text: keyHint.modelData[1]
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
           }
-          color: root.dim
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
         }
 
         // ---- no session --------------------------------------------------
