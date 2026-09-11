@@ -59,7 +59,7 @@ truthy reports every idle headphone as charging.
 | Endpoint | State |
 |---|---|
 | Batteries | works — main, level, charging |
-| NoiseControl | returns data, fields not yet mapped |
+| NoiseControl | read fully decoded; writes only half-proven (see below) |
 | Equalizer, EqualizerBands | works — 5 bands |
 | Playback, Power, Listening, SpeakToChat | return data |
 | VoiceGuidance, ConnectionMode | single byte each |
@@ -71,6 +71,27 @@ truthy reports every idle headphone as charging.
 Use `./tools/dump.py --expect N` to map an unknown field: it flags any byte
 close to a value you can verify on the headphones themselves.
 
-Next: map the NoiseControl fields (the ones the widget needs), add setters,
-then a daemon holding the link plus a thin CLI (`mdrctl watch`), then the
-bar widget.
+### Noise control: reading solved, writing not yet
+
+The struct decodes cleanly from the header — mode, ambient level, focus on
+voice, button behaviour, adaptive ambient and its sensitivity — and matches
+what the headphones report.
+
+Writing is **not trustworthy yet**:
+
+- cancelling -> ambient is accepted and echoed back by the device, reliably
+- ambient -> cancelling was accepted (`set` and `commit` both return OK, the
+  dirty flag sets) but the device did not echo the new mode back within ten
+  seconds, twice
+
+Between sessions the headphones were found back on cancelling, so the write may
+apply late, or the mode may revert when the control session drops, or it was
+changed by the button on the headphones. Not yet distinguished.
+
+Until that is understood, do not rely on `set_noise_mode`, and do not run it
+against headphones someone is wearing without telling them first.
+
+Next: work out why the reverse write does not confirm — likely candidates are
+an extra required field, a commit that needs different sequencing, or a stale
+cached read. Then a daemon holding the link plus a thin CLI (`mdrctl watch`),
+then the bar widget.

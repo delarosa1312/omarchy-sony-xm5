@@ -30,6 +30,15 @@ BATTERY_PART = {0: "main", 1: "left", 2: "right", 3: "case"}
 # idle headphone as charging.
 CHARGING = {0: "unknown", 1: "no", 2: "yes", 3: "complete"}
 
+NOISE_MODE = {0: "off", 1: "cancelling", 2: "ambient"}
+NOISE_MODE_BY_NAME = {v: k for k, v in NOISE_MODE.items()}
+NOISE_BUTTON = {0: "none", 1: "nc/ambient/off", 2: "nc/ambient",
+                3: "nc/off", 4: "ambient/off"}
+ADAPTIVE_SENSITIVITY = {0: "unknown", 1: "low", 2: "standard", 3: "high"}
+
+# Ambient level runs 0-20 on this family; 20 lets the most sound through.
+AMBIENT_LEVEL_MAX = 20
+
 
 class Battery(C.Structure):
     # Layout verified against mdr-c/Headphones.h.
@@ -39,6 +48,20 @@ class Battery(C.Structure):
         ("level_percent", C.c_uint8),
         ("update_threshold_percent", C.c_uint8),
         ("charging", C.c_uint32),
+    ]
+
+
+class NoiseControl(C.Structure):
+    """mdr-c/Headphones.h. ambient_level is the only byte-sized field, so the
+    compiler pads it out to the next word; ctypes lays it out identically."""
+    _fields_ = [
+        ("mode", C.c_uint32),
+        ("ambient_level", C.c_uint8),
+        ("changing_asm_level", C.c_uint32),
+        ("focus_on_voice", C.c_uint32),
+        ("button_mode", C.c_uint32),
+        ("adaptive_ambient", C.c_uint32),
+        ("adaptive_sensitivity", C.c_uint32),
     ]
 
 
@@ -77,6 +100,10 @@ class Library:
         self.hp_dirty = sig(self.mdr, "mdrHeadphonesIsDirty", u32, p)
         self.batteries = sig(self.mdr, "mdrHeadphonesGetBatteries", u32, p,
                              C.POINTER(Battery), C.POINTER(u32))
+        self.get_noise = sig(self.mdr, "mdrHeadphonesGetNoiseControl", u32, p,
+                             C.POINTER(NoiseControl))
+        self.set_noise = sig(self.mdr, "mdrHeadphonesSetNoiseControl", u32, p,
+                             C.POINTER(NoiseControl))
         self._result_string = sig(self.mdr, "mdrResultString", C.c_char_p, u32)
 
     def result(self, code):
@@ -158,6 +185,39 @@ class Headphones:
             raise MDRError(f"battery read failed: {self.lib.result(r)}")
         return [b for b in list(buf)[: count.value] if b.present]
 
+    def get_noise_control(self):
+        nc = NoiseControl()
+        r = self.lib.get_noise(self._hp, C.byref(nc))
+        if r != RESULT_OK:
+            raise MDRError(f"noise control read failed: {self.lib.result(r)}")
+        return nc
+
+    def set_noise_control(self, nc, confirm_timeout=3.0):
+        """Write a noise-control state and wait for the device to echo it back."""
+        r = self.lib.set_noise(self._hp, C.byref(nc))
+        if r != RESULT_OK:
+            raise MDRError(f"noise control write failed: {self.lib.result(r)}")
+        self.lib.hp_commit(self._hp)
+        deadline = time.monotonic() + confirm_timeout
+        while time.monotonic() < deadline:
+            self.pump(50)
+            current = self.get_noise_control()
+            if current.mode == nc.mode:
+                return current
+        raise MDRError("device did not confirm the new noise-control state")
+
+    def set_noise_mode(self, mode, ambient_level=None):
+        """mode: 'off', 'cancelling' or 'ambient'."""
+        if isinstance(mode, str):
+            if mode not in NOISE_MODE_BY_NAME:
+                raise ValueError(f"mode must be one of {sorted(NOISE_MODE_BY_NAME)}")
+            mode = NOISE_MODE_BY_NAME[mode]
+        nc = self.get_noise_control()
+        nc.mode = mode
+        if ambient_level is not None:
+            nc.ambient_level = max(0, min(AMBIENT_LEVEL_MAX, int(ambient_level)))
+        return self.set_noise_control(nc)
+
     def close(self):
         if self._hp:
             self.lib.hp_destroy(self._hp)
@@ -174,3 +234,14 @@ def describe(battery):
     part = BATTERY_PART.get(battery.part, f"part {battery.part}")
     state = CHARGING.get(battery.charging, f"state {battery.charging}")
     return f"{part}: {battery.level_percent}% (charging: {state})"
+
+
+def describe_noise(nc):
+    parts = [f"mode: {NOISE_MODE.get(nc.mode, nc.mode)}"]
+    if nc.mode == 2:
+        parts.append(f"ambient level {nc.ambient_level}/{AMBIENT_LEVEL_MAX}")
+        parts.append(f"focus on voice: {'yes' if nc.focus_on_voice else 'no'}")
+    parts.append(f"button: {NOISE_BUTTON.get(nc.button_mode, nc.button_mode)}")
+    if nc.adaptive_ambient:
+        parts.append(f"adaptive ({ADAPTIVE_SENSITIVITY.get(nc.adaptive_sensitivity)})")
+    return ", ".join(parts)
