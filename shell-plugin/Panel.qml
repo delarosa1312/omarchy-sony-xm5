@@ -23,7 +23,6 @@ Panel {
   readonly property var barIdentity: hostWidget || root
 
   readonly property string home: Quickshell.env("HOME")
-  readonly property string mdrctl: home + "/Documents/Projects/Personal/Utils/mdrctl/bin/mdrctl"
   readonly property string statePath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/mdrctl/state.json"
 
   property var state: ({})
@@ -68,7 +67,15 @@ Panel {
     if (changed) pending = next
   }
 
-  readonly property string mac: setting("mac", "00:00:5E:00:53:01")
+  // Whichever Sony device the daemon found. The setting is only a fallback
+  // for the moments when there is no daemon to ask -- it is no longer the
+  // thing that decides which headphones this widget is about.
+  readonly property string mac:
+    state.mac !== undefined && state.mac !== "" ? String(state.mac)
+                                                : setting("mac", "00:00:5E:00:53:01")
+  readonly property string model:
+    state.model !== undefined && state.model !== "" ? String(state.model)
+                                                    : setting("name", "Headphones")
 
   // BlueZ knows whether the headphones are connected and roughly how full they
   // are without any control session, so the widget survives a stopped daemon
@@ -118,6 +125,9 @@ Panel {
   readonly property bool autoPause: eff("auto_pause", false) === true
   readonly property string powerOff: String(eff("power_off", ""))
   readonly property bool multipoint: eff("multipoint", false) === true
+  // Multipoint is not advertised in the feature list; it arrives as a general
+  // setting, so "did the headset answer" is the only test available.
+  readonly property bool hasMultipoint: state.multipoint !== undefined
   readonly property var devices: state.devices !== undefined ? state.devices : []
   readonly property var othersConnected: state.others_connected !== undefined ? state.others_connected : []
   property bool devicesExpanded: false
@@ -244,8 +254,8 @@ Panel {
 
   readonly property string barTooltip: {
     if (!present) return ""
-    if (!session) return "WH-1000XM5 — battery only, no control session"
-    return "WH-1000XM5 — " + modeName + (battery >= 0 ? ", " + battery + "%" : "")
+    if (!session) return model + " — battery only, no control session"
+    return model + " — " + modeName + (battery >= 0 ? ", " + battery + "%" : "")
   }
 
   function open() {
@@ -278,11 +288,14 @@ Panel {
   // One connection, held open, carrying commands out and state back. Spawning
   // a process per click cost 22 ms and, worse, gave the daemon no way to tell
   // the panel about a change -- which is why this used to poll a file.
+  // Claim only what actually went out. Claiming first made a click look like
+  // it had worked while the daemon was down: the control moved, held for five
+  // seconds and then snapped back, with nothing said about why.
   function send(args, field, value) {
-    if (field !== undefined) claimField(field, value)
     if (!link.connected) return false
     link.write(args.join(" ") + "\n")
     link.flush()
+    if (field !== undefined) claimField(field, value)
     return true
   }
 
@@ -366,12 +379,12 @@ Panel {
   function setMultipoint(on) { if (session) send(["multipoint", on ? "on" : "off"], "multipoint", on) }
   function deviceAction(action, mac) {
     if (!session) return
+    if (!send(["device", action, mac])) return   // no spinner for a lost write
     var next = {}
     for (var k in busyDevices) next[k] = busyDevices[k]
     next[mac] = action
     busyDevices = next
     deviceSweep.restart()
-    send(["device", action, mac])
   }
 
   function askRemove(mac, name) {
@@ -477,6 +490,11 @@ Panel {
         else if (k === "a") root.setMode("ambient")
         else if (k === "o") root.setMode("off")
         else if (k === "c") root.cycleMode()
+        else if (k === "d" && root.has("dsee")) root.setDsee(!root.dsee)
+        else if (k === "p" && root.has("auto_pause")) root.setAutoPause(!root.autoPause)
+        else if (k === "m" && root.hasMultipoint) root.setMultipoint(!root.multipoint)
+        else if (k === "e") root.eqExpanded = !root.eqExpanded
+        else if (k === "z") root.undoEq()
       }
 
       Flickable {
@@ -497,7 +515,7 @@ Panel {
 
         PanelHero {
           width: parent.width
-          title: "WH-1000XM5"
+          title: root.model
           meta: {
             if (root.battery < 0) return root.session ? "Connected" : "No control session"
             var t = root.battery + "%"
@@ -764,34 +782,19 @@ Panel {
         // Shown, not offered. The command is sent and the device acknowledges
         // it within 25 ms, then keeps the old value -- same as the equaliser
         // presets. Two controls now known to be accepted and discarded.
-        Item {
-          width: parent.width
+        ReadOnlyRow {
           visible: root.session && root.audioPriority !== "" && root.has("connection_mode")
-          implicitHeight: connLabel.implicitHeight
-
-          Text {
-            id: connLabel
-            anchors.left: parent.left
-            text: "Connection"
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-          }
-
-          Text {
-            anchors.right: parent.right
-            text: root.audioPriority === "quality" ? "sound quality" : root.audioPriority
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-          }
+          label: "Connection"
+          value: root.audioPriority === "quality" ? "sound quality" : root.audioPriority
+          reason: "The headset acknowledges a change here and then keeps the old value. "
+                + "Change it in Sony's app."
         }
 
         // ---- power ----------------------------------------------------------
         Column {
           width: parent.width
           spacing: Style.space(8)
-          visible: root.session && root.powerOff !== "" && root.has("auto_power_off")
+          visible: root.session && (root.has("auto_power_off") || root.has("auto_pause"))
 
           PanelSectionHeader {
             text: "POWER"
@@ -803,30 +806,17 @@ Panel {
           // the equaliser presets and connection priority. Verified twice by
           // reconnecting -- what looked like it working was our own optimism
           // being read back.
-          Item {
-            width: parent.width
-            implicitHeight: powerOffLabelText.implicitHeight
-
-            Text {
-              id: powerOffLabelText
-              anchors.left: parent.left
-              text: "Switch off"
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
-
-            Text {
-              anchors.right: parent.right
-              text: root.powerOffLabel(root.powerOff)
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-            }
+          ReadOnlyRow {
+            visible: root.powerOff !== "" && root.has("auto_power_off")
+            label: "Switch off"
+            value: root.powerOffLabel(root.powerOff)
+            reason: "The headset acknowledges a change here and then keeps the old value. "
+                  + "Change it in Sony's app."
           }
 
           Toggle {
             width: parent.width
+            visible: root.has("auto_pause")
             label: "Auto pause"
             description: "Follow the player automatically"
             checked: root.autoPause
@@ -891,6 +881,7 @@ Panel {
 
             Toggle {
               width: parent.width
+              visible: root.hasMultipoint
               opacity: root.waiting("multipoint") ? 0.55 : 1.0
               label: "Multipoint"
               description: "Stay connected to two devices at once"
@@ -1030,9 +1021,19 @@ Panel {
         PanelSeparator { foreground: root.foreground }
 
         // ---- detail ------------------------------------------------------
+        // Things the headset tells us about itself. None of them are settable
+        // from here, which the header says once rather than each row saying it.
         Column {
           width: parent.width
           spacing: Style.spacing.labelGap
+          visible: root.buttonMode !== "" || root.adaptive
+                   || (root.session && root.mode === "ambient")
+
+          PanelSectionHeader {
+            text: "REPORTED"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
 
           InfoRow {
             visible: root.buttonMode !== ""
@@ -1049,6 +1050,26 @@ Panel {
             label: "Focus on voice"
             value: root.focusOnVoice ? "yes" : "no"
           }
+        }
+
+        // ---- keys ----------------------------------------------------------
+        // A shortcut nobody can see is a shortcut nobody uses. One dim line
+        // costs less than a hint on every control.
+        Text {
+          width: parent.width
+          visible: root.session
+          text: {
+            var keys = ["n/a/o  modes", "c  cycle"]
+            if (root.has("dsee")) keys.push("d  dsee")
+            if (root.has("auto_pause")) keys.push("p  pause")
+            if (root.hasMultipoint) keys.push("m  multipoint")
+            if (root.has("equalizer")) keys.push("e  equaliser", "z  undo")
+            return keys.join("     ")
+          }
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
         }
 
         // ---- no session --------------------------------------------------
@@ -1115,6 +1136,64 @@ Panel {
       if (!f || !f.interactive) return
       f.contentY = Math.max(0, Math.min(f.contentHeight - f.height,
                                         f.contentY - wheel.angleDelta.y))
+    }
+  }
+
+  // A value the headset reports but refuses to change. Without the marker
+  // these rows are indistinguishable from live controls, and the only way to
+  // discover they are inert is to click one and wonder whether the widget is
+  // broken.
+  component ReadOnlyRow: Item {
+    property string label: ""
+    property string value: ""
+    property string reason: "The headset reports this but will not accept a change from here."
+    width: parent ? parent.width : 0
+    implicitHeight: visible ? Math.max(roLabel.implicitHeight, roValue.implicitHeight) : 0
+
+    Text {
+      id: roLabel
+      anchors.left: parent.left
+      anchors.verticalCenter: parent.verticalCenter
+      text: parent.label
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.body
+    }
+
+    Row {
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      spacing: Style.space(6)
+
+      Text {
+        id: roValue
+        anchors.verticalCenter: parent.verticalCenter
+        text: parent.parent.value
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+      }
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        text: "󰌾"
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+    }
+
+    MouseArea {
+      id: roHover
+      anchors.fill: parent
+      hoverEnabled: true
+      acceptedButtons: Qt.NoButton
+
+      PanelToolTip {
+        visible: roHover.containsMouse
+        text: parent.parent.reason
+        fontFamily: root.fontFamily
+      }
     }
   }
 
