@@ -1099,10 +1099,22 @@ Panel {
 
           Text {
             width: parent.width
+            // Whoever reaches this did not read the marketplace description --
+            // that is the normal case, not a failure of theirs, and the panel
+            // is the last place left to say it. So say what to run, not where
+            // to go and read about it.
             text: root.needsSetup
-              ? "This widget is a face for mdrctld, which is not answering. The "
-                + "daemon installs separately, from the same repository: "
-                + "github.com/delarosa1312/omarchy-sony-xm5"
+              ? "This widget is a face for mdrctld, which is not answering.\n\n"
+                + "A bar widget cannot hold the headset's Bluetooth session, so "
+                + "the daemon installs separately from the same repository. "
+                + "Once it is installed:\n\n"
+                // Two lines rather than one: the panel is narrower than the
+                // combined command, and a command that wraps mid-word is one
+                // somebody mistypes.
+                + "systemctl --user enable --now mdrctld\n"
+                + "systemctl --user enable --now mpris-proxy\n\n"
+                + "Install and removal instructions:\n"
+                + "github.com/delarosa1312/omarchy-sony-xm5#install"
               : root.errorText !== ""
                 ? root.errorText
                 : "No control session. BlueZ still reports the battery, but noise control needs mdrctld."
