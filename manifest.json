@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.delarosa1312.sony-xm5",
   "name": "Sony XM5",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "author": "delarosa1312",
   "license": "MIT",
   "description": "Battery and controls for the Sony WH-1000XM5 and WF-1000XM5",
