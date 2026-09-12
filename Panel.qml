@@ -24,7 +24,16 @@ Panel {
   readonly property var barIdentity: hostWidget || root
 
   readonly property string home: Quickshell.env("HOME")
-  readonly property string statePath: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/mdrctl/state.json"
+
+  // Where the daemon keeps its socket and its state, and deliberately without
+  // a /tmp fallback. mdrctld builds this path as XDG_RUNTIME_DIR or
+  // /run/user/<uid>, both of which only this user can write; /tmp has a
+  // world-writable parent, so falling back there would let any local user
+  // squat the directory and hand the panel whatever state it liked -- and
+  // would look in a different place than the daemon anyway. Unset, there is
+  // simply nothing to read, which is what needsSetup already says out loud.
+  readonly property string runDir: Quickshell.env("XDG_RUNTIME_DIR")
+  readonly property string statePath: runDir ? runDir + "/mdrctl/state.json" : ""
 
   property var state: ({})
   property real nowSec: 0
@@ -371,8 +380,8 @@ Panel {
   // poll and a click shows up as fast as the device answers.
   Socket {
     id: link
-    path: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/mdrctl/sock"
-    connected: true
+    path: root.runDir ? root.runDir + "/mdrctl/sock" : ""
+    connected: root.runDir !== ""
     onConnectedChanged: {
       if (connected) {
         root.daemonSeen = true
@@ -414,7 +423,7 @@ Panel {
     triggeredOnStart: true
     onTriggered: {
       root.nowSec = Date.now() / 1000
-      if (!link.connected) {
+      if (root.runDir !== "" && !link.connected) {
         link.connected = true
         stateFile.reload()
       }
