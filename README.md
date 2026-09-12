@@ -51,13 +51,18 @@ handshake costs seconds.
     cd omarchy-sony-xm5
     makepkg --cleanbuild --install
 
-That builds `libmdr` from [SonyHeadphonesClient][upstream], installs `mdrctl`
-and `mdrctld`, and enables the user services. Remove it with
-`sudo pacman -Rns mdrctl`.
+That builds `libmdr` from [SonyHeadphonesClient][upstream] and installs
+`mdrctl` and `mdrctld`. Packages do not start services on Arch, so turn them
+on yourself -- the install prints this too:
+
+    systemctl --user enable --now mdrctld mpris-proxy
 
 Not on Arch, or want it out of a checkout instead:
 
     ./scripts/install.sh
+
+which builds `libmdr`, writes the two user units pointing at your checkout,
+and does enable them.
 
 **The widget**:
 
@@ -81,6 +86,20 @@ It runs nothing as root, opens no Bluetooth session from the panel, and starts
 no second Quickshell process. The daemon talks to the panel over a unix socket
 in `$XDG_RUNTIME_DIR`.
 
+
+## Remove
+
+The widget:
+
+    omarchy plugin remove io.github.delarosa1312.sony-xm5
+
+The daemon, whichever way it went on:
+
+    sudo pacman -Rns mdrctl      # the package
+    ./scripts/uninstall.sh       # a checkout
+
+Either stops the user services first, so the headset's control session is
+handed back rather than held until you log out.
 
 ## Place it on the bar
 
@@ -107,6 +126,9 @@ the battery level — but not which of your devices to ask about, so give it the
 address if you want a reading in that case:
 
     omarchy bar set io.github.delarosa1312.sony-xm5 mac AA:BB:CC:DD:EE:FF
+
+or the same field under Setup > Plugins, where it is listed along with the
+name the panel shows before the headset reports its own.
 
 `bluetoothctl devices Connected` will tell you the address. Nothing else needs
 it, and the panel ignores it entirely while the daemon is up.
