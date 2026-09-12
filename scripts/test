@@ -54,6 +54,23 @@ else
   status=1
 fi
 
+# The upstream commit is spelled out in full everywhere it is used, so that a
+# static reader can verify the pin. That buys four copies of it, and four
+# copies drift. There is exactly one correct answer, so check them against it.
+mdrcommit=$(sed -n 's/^_mdrcommit=//p' "$ROOT/PKGBUILD")
+if [[ ! $mdrcommit =~ ^[0-9a-f]{40}$ ]]; then
+  echo "PKGBUILD _mdrcommit is not a full 40-character SHA: $mdrcommit" >&2
+  status=1
+else
+  stray=$(grep -oE '\b[0-9a-f]{40}\b' "$ROOT/scripts/build-libmdr.sh" | sort -u | grep -v "^$mdrcommit$" || true)
+  if [ -n "$stray" ]; then
+    echo "build-libmdr.sh pins a commit the PKGBUILD does not: $stray" >&2
+    status=1
+  else
+    echo "upstream pinned to $mdrcommit in PKGBUILD and build-libmdr.sh"
+  fi
+fi
+
 # The PKGBUILD builds a tag, not the checkout, so a tag that does not exist
 # turns `makepkg` into a clone failure for whoever follows the README. A
 # warning rather than a failure: between bumping the version and cutting the
