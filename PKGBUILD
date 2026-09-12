@@ -47,9 +47,12 @@ package() {
 
   install -Dm644 "$pkgname/daemon/systemd-user/mpris-proxy.service" \
     "$pkgdir/usr/lib/systemd/user/mpris-proxy.service"
-  # The unit template carries @MDRCTLD@ so a checkout can fill in its own path.
-  # Installed, the daemon is simply on PATH.
-  sed "s|@MDRCTLD@|/usr/bin/mdrctld|" "$pkgname/daemon/systemd-user/mdrctld.service" \
+  # The unit template carries @PYTHON@/@MDRCTLD@/@ARGS@ so a checkout can point
+  # them at itself. Installed, both are fixed absolute paths and libmdr is found
+  # at /usr/lib/mdrctl without being told, so there are no arguments to pass.
+  sed -e "s|@PYTHON@|/usr/bin/python3|" \
+      -e "s|@MDRCTLD@|/usr/bin/mdrctld|" \
+      -e "s|@ARGS@||" "$pkgname/daemon/systemd-user/mdrctld.service" \
     > mdrctld.service.packaged
   install -Dm644 mdrctld.service.packaged \
     "$pkgdir/usr/lib/systemd/user/mdrctld.service"

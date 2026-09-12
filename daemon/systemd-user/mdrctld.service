@@ -1,6 +1,6 @@
 [Unit]
 Description=Hold the Sony MDR control session for mdrctl
-Documentation=https://github.com/mos9527/SonyHeadphonesClient
+Documentation=https://github.com/delarosa1312/omarchy-sony-xm5
 After=bluetooth.target
 # Session-scoped: without PartOf it survives logout and keeps the headphones'
 # single control session to itself, with nobody at the keyboard.
@@ -10,11 +10,54 @@ PartOf=graphical-session.target
 StartLimitIntervalSec=0
 
 [Service]
-# @MDRCTLD@ is filled in by scripts/install.sh with wherever this was cloned.
-# It used to be one author's home directory, which worked for exactly one
-# person.
 Type=simple
-ExecStart=@MDRCTLD@
+# The interpreter and the script are both absolute and both filled in at
+# install time. A `#!/usr/bin/env python3` shebang would let an inherited PATH
+# pick the interpreter of a service that outlives the shell that set it.
+ExecStart=@PYTHON@ @MDRCTLD@ @ARGS@
+
+# systemd creates and owns %t/mdrctl, 0700, and removes it on stop. That gives
+# the daemon a directory whose provenance is not in question before it opens
+# it -- it still verifies and holds a descriptor, but it is no longer creating
+# the anchor it then trusts.
+RuntimeDirectory=mdrctl
+RuntimeDirectoryMode=0700
+
+# Everything the daemon needs is on the command line above, so it needs nothing
+# from the environment but the runtime directory the session hands it. Clearing
+# the rest is the point: MDR_BUILD used to select the shared objects this
+# process loads, and a variable exported in a login shell should never have
+# reached a long-lived service at all.
+Environment=PATH=/usr/bin:/bin
+UnsetEnvironment=MDR_BUILD MDR_TRACE MDR_MAC LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT PYTHONPATH PYTHONHOME PYTHONSTARTUP
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectProc=invisible
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# AF_UNIX reaches the widget and D-Bus; AF_BLUETOOTH is the RFCOMM link to the
+# headset; AF_NETLINK is how BlueZ reports the adapter coming and going.
+RestrictAddressFamilies=AF_UNIX AF_BLUETOOTH AF_NETLINK
+CapabilityBoundingSet=
+# A ceiling, not a target: the daemon holds one device's state and a handful of
+# subscribers. Anything approaching this is a leak, and stopping is better than
+# taking the session down with it.
+MemoryMax=128M
+TasksMax=32
+
 Restart=on-failure
 RestartSec=5
 
