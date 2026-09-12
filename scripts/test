@@ -11,12 +11,16 @@ python3 -m unittest discover -s tests -q || status=1
 echo
 echo "== panel logic (node) =="
 if command -v node >/dev/null; then
-  if node tests/model.test.js > /tmp/mdrctl-model-test.log 2>&1; then
-    grep -E "^# (tests|pass|fail)" /tmp/mdrctl-model-test.log
+  # mktemp rather than a fixed name under /tmp: a predictable path in a
+  # world-writable directory is somebody else's to create first.
+  node_log=$(mktemp)
+  if node tests/model.test.js > "$node_log" 2>&1; then
+    grep -E "^# (tests|pass|fail)" "$node_log"
   else
-    cat /tmp/mdrctl-model-test.log
+    cat "$node_log"
     status=1
   fi
+  rm -f "$node_log"
 else
   echo "node not installed -- skipped"
 fi
@@ -34,5 +38,37 @@ rm -rf "$export_dir"
 # so only the panel is linted -- the one where a mistake would be ours.
 qmllint -I "${OMARCHY_PATH:-/usr/share/omarchy}/shell" "$ROOT/Panel.qml" \
   && echo "Panel.qml lints clean" || status=1
+
+echo
+echo "== version agreement =="
+# Three files carry the version and nothing made them agree. A release that
+# bumps one and forgets another builds the wrong tag or lists the wrong
+# version, and neither failure shows up until somebody installs it.
+manifest_version=$(python3 -c "import json;print(json.load(open('$ROOT/manifest.json'))['version'])")
+pkgbuild_version=$(sed -n 's/^pkgver=//p' "$ROOT/PKGBUILD")
+srcinfo_version=$(sed -n 's/^[[:space:]]*pkgver = //p' "$ROOT/.SRCINFO")
+if [ "$manifest_version" = "$pkgbuild_version" ] && [ "$manifest_version" = "$srcinfo_version" ]; then
+  echo "manifest.json, PKGBUILD and .SRCINFO all say $manifest_version"
+else
+  echo "version mismatch: manifest.json=$manifest_version PKGBUILD=$pkgbuild_version .SRCINFO=$srcinfo_version" >&2
+  status=1
+fi
+
+# The PKGBUILD builds a tag, not the checkout, so a tag that does not exist
+# turns `makepkg` into a clone failure for whoever follows the README. A
+# warning rather than a failure: between bumping the version and cutting the
+# tag there is always a moment where this is legitimately true, and that moment
+# is the middle of a release, which is a bad time for the tests to go red.
+if git -C "$ROOT" rev-parse -q --verify "refs/tags/v$manifest_version" >/dev/null; then
+  tagged=$(git -C "$ROOT" rev-parse "refs/tags/v$manifest_version^{commit}")
+  head=$(git -C "$ROOT" rev-parse HEAD)
+  if [ "$tagged" = "$head" ]; then
+    echo "tag v$manifest_version is at HEAD"
+  else
+    echo "warning: tag v$manifest_version is not at HEAD -- makepkg would build ${tagged:0:7}, not your checkout" >&2
+  fi
+else
+  echo "warning: no tag v$manifest_version yet -- cut it before anyone runs makepkg" >&2
+fi
 
 exit $status
