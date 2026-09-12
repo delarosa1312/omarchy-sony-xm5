@@ -13,7 +13,11 @@ import ctypes
 import importlib.util
 import json
 import os
+import shutil
+import socket
+import stat
 import sys
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -163,8 +167,15 @@ BUSCTL = {
 
 
 def fake_busctl(payload=BUSCTL, returncode=0):
-    result = mock.Mock(returncode=returncode, stdout=json.dumps(payload))
-    return mock.patch.object(mdrctld.subprocess, "run", return_value=result)
+    """Stand in for the busctl call.
+
+    The seam is run_tool() rather than subprocess: it is what bounds the
+    output and what the daemon actually calls, and patching it means a test
+    that stops matching reality fails instead of quietly shelling out to the
+    real busctl and asserting against whatever is paired with this machine.
+    """
+    out = None if returncode != 0 else json.dumps(payload)
+    return mock.patch.object(mdrctld, "run_tool", return_value=out)
 
 
 class DiscoveryTest(unittest.TestCase):
@@ -212,8 +223,7 @@ class DiscoveryTest(unittest.TestCase):
             self.assertEqual(mdrctld.bluez_devices(), {})
 
     def test_survives_busctl_returning_nonsense(self):
-        result = mock.Mock(returncode=0, stdout="not json")
-        with mock.patch.object(mdrctld.subprocess, "run", return_value=result):
+        with mock.patch.object(mdrctld, "run_tool", return_value="not json"):
             self.assertEqual(mdrctld.bluez_devices(), {})
 
 
@@ -342,6 +352,149 @@ class ExplainTest(unittest.TestCase):
 
     def test_an_unknown_error_is_passed_through_untouched(self):
         self.assertEqual(mdrctld.Daemon.explain("no such adapter"), "no such adapter")
+
+
+class RuntimeDirTest(unittest.TestCase):
+    """The runtime directory and everything written into it.
+
+    These cover the hardening a marketplace security review asked for: the
+    daemon is long-lived, its directory sits in a place other processes on the
+    machine can reach, and the difference between naming a path and holding a
+    descriptor is the difference between checking a thing and using the thing
+    you checked.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.rundir = os.path.join(self.tmp, "mdrctl")
+        self._patch = mock.patch.object(mdrctld, "RUNDIR", self.rundir)
+        self._patch.start()
+        self.addCleanup(self._patch.stop)
+
+    def test_creates_the_directory_private(self):
+        fd = mdrctld.open_rundir()
+        self.addCleanup(os.close, fd)
+        self.assertEqual(stat.S_IMODE(os.fstat(fd).st_mode), 0o700)
+
+    def test_tightens_a_directory_left_open(self):
+        """A directory from an older version, or from anything else, does not
+        get to stay group- or world-accessible just because it already exists."""
+        os.makedirs(self.rundir, mode=0o755)
+        fd = mdrctld.open_rundir()
+        self.addCleanup(os.close, fd)
+        self.assertEqual(stat.S_IMODE(os.fstat(fd).st_mode), 0o700)
+
+    def test_refuses_a_symlinked_runtime_directory(self):
+        """O_NOFOLLOW: if the directory itself has been replaced by a link to
+        somewhere else, that is not our directory and we do not write in it."""
+        elsewhere = os.path.join(self.tmp, "elsewhere")
+        os.makedirs(elsewhere)
+        os.symlink(elsewhere, self.rundir)
+        with self.assertRaises(OSError):
+            mdrctld.open_rundir()
+
+    def test_state_write_does_not_follow_a_planted_link(self):
+        """The temp name is created O_EXCL|O_NOFOLLOW, so a link planted at
+        state.json.new is refused rather than written through to its target."""
+        fd = mdrctld.open_rundir()
+        self.addCleanup(os.close, fd)
+        target = os.path.join(self.tmp, "victim")
+        with open(target, "w") as f:
+            f.write("untouched")
+        os.symlink(target, os.path.join(self.rundir, mdrctld.STATE_TMP_NAME))
+
+        d = mdrctld.Daemon.__new__(mdrctld.Daemon)
+        d.dirfd = fd
+        d.write_state({"mode": "off"})
+
+        # The link is removed and the temp file created fresh under O_EXCL, so
+        # the write never reaches the link's target. Writing through it is the
+        # failure this guards against; refusing to run is not required.
+        with open(target) as f:
+            self.assertEqual(f.read(), "untouched")
+        published = os.path.join(self.rundir, mdrctld.STATE_NAME)
+        self.assertFalse(os.path.islink(published))
+        with open(published) as f:
+            self.assertEqual(json.load(f)["mode"], "off")
+
+    def test_state_write_is_atomic_and_private(self):
+        fd = mdrctld.open_rundir()
+        self.addCleanup(os.close, fd)
+        d = mdrctld.Daemon.__new__(mdrctld.Daemon)
+        d.dirfd = fd
+        d.write_state({"mode": "ambient"})
+        path = os.path.join(self.rundir, mdrctld.STATE_NAME)
+        with open(path) as f:
+            self.assertEqual(json.load(f)["mode"], "ambient")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        # The temp name must not survive a successful write.
+        self.assertFalse(os.path.exists(os.path.join(self.rundir, mdrctld.STATE_TMP_NAME)))
+
+
+class ClientLimitTest(unittest.TestCase):
+    """What one local client can make the daemon hold.
+
+    Anyone with an account on the machine can open this socket, so 'it is only
+    our own widget' is not a bound on the input.
+    """
+
+    def daemon(self):
+        d = mdrctld.Daemon.__new__(mdrctld.Daemon)
+        d.subscribers = []
+        d.partial = {}
+        return d
+
+    def test_unterminated_line_is_cut_off(self):
+        """Without a cap, bytes with no newline in them accumulate forever."""
+        d = self.daemon()
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        d.subscribers.append(a)
+        buffers = {}
+        b.sendall(b"x" * (mdrctld.MAX_LINE + 1))
+        # recv() may need more than one pass to see it all.
+        for _ in range(64):
+            if a not in d.subscribers:
+                break
+            d.serve_subscriber(a, buffers)
+        self.assertNotIn(a, d.subscribers, "oversized line was not dropped")
+        self.assertNotIn(a, buffers)
+
+    def test_a_normal_command_still_gets_through(self):
+        """The cap must not be so eager that it eats real traffic."""
+        d = self.daemon()
+        d.handle = lambda text: {"ok": True, "echo": text}
+        a, b = socket.socketpair()
+        self.addCleanup(a.close)
+        self.addCleanup(b.close)
+        d.subscribers.append(a)
+        b.sendall(b"status\n")
+        d.serve_subscriber(a, {})
+        self.assertIn(a, d.subscribers)
+        self.assertIn(b"status", b.recv(4096))
+
+
+class ToolTest(unittest.TestCase):
+    def test_busctl_is_an_absolute_trusted_path(self):
+        """Never a bare name: PATH is inherited, and this daemon outlives the
+        session that handed it one."""
+        for cand in mdrctld.BUSCTL_CANDIDATES:
+            self.assertTrue(cand.startswith("/"), cand)
+
+    def test_output_is_capped(self):
+        """A tool that will not stop talking is an error, not a memory leak."""
+        with mock.patch.object(mdrctld, "BUSCTL", "/bin/sh"):
+            out = mdrctld.run_tool(
+                ["/bin/sh", "-c",
+                 f"yes x | head -c {mdrctld.MAX_TOOL_OUTPUT + 4096}"])
+        self.assertIsNone(out)
+
+    def test_normal_output_survives(self):
+        with mock.patch.object(mdrctld, "BUSCTL", "/bin/sh"):
+            out = mdrctld.run_tool(["/bin/sh", "-c", "printf hello"])
+        self.assertEqual(out, "hello")
 
 
 if __name__ == "__main__":

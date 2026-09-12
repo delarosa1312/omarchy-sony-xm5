@@ -9,7 +9,7 @@ state, and answers cheap questions about it over a Unix socket.
 
 Stop it (`systemctl --user stop mdrctld`) before using Sony's app.
 """
-import json, os, select, socket, sys, time, subprocess, signal, errno
+import argparse, errno, json, os, select, signal, socket, stat, subprocess, sys, time
 
 # A checkout keeps the module in ../lib; the package puts it beside the
 # shared objects it loads. Both are offered, and the import takes whichever
@@ -18,25 +18,116 @@ _here = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.join(_here, "..", "lib"), "/usr/lib/mdrctl"]
 import mdr
 
-# Which headphones. Normally none: the daemon takes whichever Sony device is
-# connected, so a pair it has never seen works the moment you put it on. Set
-# MDR_MAC to pin it to one, which is only useful if two are on at once.
-MAC = os.environ.get("MDR_MAC", "")
 # The service a Sony device offers if it speaks MDR at all. This is how the
 # headphones are recognised -- by what they can do rather than by address --
 # and it is the same UUID the session is opened on.
 MDR_UUID = "956c7b26-d49a-4ba8-b03f-b17d393cb6e2"
-BUILD = os.environ.get(
-    "MDR_BUILD",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "vendor",
-                 "SonyHeadphonesClient", "build"),
-)
+
+# Everything below used to be read from the environment, which a long-lived
+# service simply inherits. MDR_BUILD was the sharp one: it chose which shared
+# objects to dlopen, and it was consulted before the packaged location, so
+# anything able to set the daemon's environment chose the code it ran. These
+# are command-line arguments now, because an argument is something the unit
+# states and an environment is something it is handed.
+MAC = ""
+BUILD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                     "vendor", "SonyHeadphonesClient", "build")
+TRACE = ""
+
+# XDG_RUNTIME_DIR stays: it is how a user session tells a service where its
+# private directory is, and there is no other way to learn it. What changes is
+# that the directory it names is verified and then held open, so every later
+# operation goes through that descriptor rather than re-walking a path that
+# something else may have altered in between. See open_rundir().
 RUNDIR = os.path.join(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"), "mdrctl")
-# Set MDR_TRACE to a path to record every frame, command and publish. Off by
-# default: this is a debugging instrument, not a running cost.
-TRACE = os.environ.get("MDR_TRACE", "")
 SOCKET = os.path.join(RUNDIR, "sock")
 STATE = os.path.join(RUNDIR, "state.json")
+STATE_NAME = "state.json"
+STATE_TMP_NAME = "state.json.new"
+SOCKET_NAME = "sock"
+
+# External tools, by absolute path. Resolving `busctl` through an inherited
+# PATH lets whatever the service was handed decide which binary it runs.
+BUSCTL_CANDIDATES = ("/usr/bin/busctl", "/bin/busctl")
+
+# busctl's reply is the only thing read from it, and GetManagedObjects on a
+# machine with many paired devices is large but bounded. A ceiling turns a
+# runaway or hostile reply into an error instead of into the daemon's memory.
+MAX_TOOL_OUTPUT = 4 * 1024 * 1024
+
+# What one client may make the daemon hold. A subscriber is long-lived and
+# mostly silent, so the useful limits are on bytes and connections rather than
+# on idleness -- an unterminated line is what grows without bound, and a
+# partial line that stops arriving is the shape of that abuse.
+MAX_LINE = 64 * 1024
+MAX_CLIENTS = 32
+PARTIAL_LINE_WAIT = 30.0
+
+
+def busctl_path():
+    """The busctl to run, or None. Fixed locations only, and it must be a
+    regular executable file -- not a symlink chain we did not follow."""
+    for cand in BUSCTL_CANDIDATES:
+        try:
+            st = os.stat(cand)
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+BUSCTL = busctl_path()
+
+
+def run_tool(argv, timeout=5):
+    """Run a trusted tool and return its stdout, or None.
+
+    Reads through a pipe with a ceiling rather than capture_output=True, which
+    would buffer whatever the child decided to produce.
+    """
+    if not BUSCTL:
+        return None
+    try:
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, env={"LC_ALL": "C"})
+    except OSError:
+        return None
+    try:
+        out = proc.stdout.read(MAX_TOOL_OUTPUT + 1)
+        if len(out) > MAX_TOOL_OUTPUT:
+            proc.kill()
+            proc.wait()
+            return None
+        if proc.wait(timeout=timeout) != 0:
+            return None
+    except (OSError, subprocess.TimeoutExpired):
+        proc.kill()
+        proc.wait()
+        return None
+    finally:
+        proc.stdout.close()
+    return out.decode("utf-8", errors="replace")
+
+
+def open_rundir():
+    """Create the runtime directory, check it, and hold it open.
+
+    Holding a descriptor is the point. Every later create, replace and unlink
+    names a file *inside this directory object* instead of re-walking
+    "$XDG_RUNTIME_DIR/mdrctl/..." each time, so nothing can swap a component
+    of that path for a symlink between one operation and the next. O_NOFOLLOW
+    means we fail rather than follow if the directory itself is already one.
+    """
+    os.makedirs(RUNDIR, mode=0o700, exist_ok=True)
+    fd = os.open(RUNDIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    st = os.fstat(fd)
+    if st.st_uid != os.getuid():
+        os.close(fd)
+        sys.exit(f"{RUNDIR} belongs to uid {st.st_uid}, not {os.getuid()}")
+    if stat.S_IMODE(st.st_mode) & 0o077:
+        os.fchmod(fd, 0o700)
+    return fd
 
 # Cycling order for a bar click. Ambient last so a stray click lands on a mode
 # you can hear yourself out of.
@@ -57,17 +148,12 @@ def bluez_devices():
     """Every device BlueZ knows, in one call. Asking for the whole tree at once
     beats a property read per device: this runs while we are looking for a
     headset to talk to, which is exactly when nothing else is happening."""
-    try:
-        out = subprocess.run(
-            ["busctl", "--json=short", "call", "org.bluez", "/",
-             "org.freedesktop.DBus.ObjectManager", "GetManagedObjects"],
-            capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.TimeoutExpired):
-        return {}
-    if out.returncode != 0:
+    out = run_tool([BUSCTL, "--json=short", "call", "org.bluez", "/",
+                    "org.freedesktop.DBus.ObjectManager", "GetManagedObjects"])
+    if out is None:
         return {}
     try:
-        objects = json.loads(out.stdout)["data"][0]
+        objects = json.loads(out)["data"][0]
     except (ValueError, KeyError, IndexError):
         return {}
     found = {}
@@ -116,20 +202,20 @@ def find_headphones(pinned=""):
 def bluez_get(path, iface, prop):
     """One property, or None. Shelling out beats a D-Bus dependency here: this
     is called once every few seconds, and only while we have no session."""
-    try:
-        out = subprocess.run(["busctl", "get-property", "org.bluez", path, iface, prop],
-                             capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.TimeoutExpired):
+    out = run_tool([BUSCTL, "get-property", "org.bluez", path, iface, prop])
+    if out is None:
         return None
-    if out.returncode != 0:
-        return None
-    parts = out.stdout.split()
+    parts = out.split()
     return parts[1] if len(parts) > 1 else None
 
 
 class Daemon:
     def __init__(self):
         self.lib = mdr.Library(BUILD)
+        # Opened in run(); every state and socket operation goes through it.
+        self.dirfd = None
+        # conn -> when an incomplete command line first appeared on it.
+        self.partial = {}
         self.hp = None
         self.path = None
         # Filled in by present(), which is what decides who we are talking to.
@@ -495,11 +581,37 @@ class Daemon:
                            f"mode={s.get('mode')} claims={sorted(self.claims)}")
         self.state = s
         self._last_write = now
-        tmp = STATE + ".new"
-        with open(tmp, "w") as f:
-            json.dump(s, f)
-        os.replace(tmp, STATE)   # atomic: readers never see half a file
+        self.write_state(s)
         self.push(s)
+
+    def write_state(self, s):
+        """Write state.json through the held directory descriptor.
+
+        O_EXCL on the temp file means we create it or we fail -- we never write
+        through a name something else already put there. os.replace stays
+        atomic, so a reader still sees the old file or the new one and never a
+        half-written one; it just resolves both names relative to the verified
+        directory now.
+        """
+        blob = json.dumps(s).encode()
+        try:
+            os.unlink(STATE_TMP_NAME, dir_fd=self.dirfd)
+        except FileNotFoundError:
+            pass
+        fd = os.open(STATE_TMP_NAME,
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=self.dirfd)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(blob)
+        except Exception:
+            try:
+                os.unlink(STATE_TMP_NAME, dir_fd=self.dirfd)
+            except OSError:
+                pass
+            raise
+        os.replace(STATE_TMP_NAME, STATE_NAME,
+                   src_dir_fd=self.dirfd, dst_dir_fd=self.dirfd)
 
     def push(self, s):
         """Tell the subscribers, so a widget does not have to poll for it."""
@@ -515,6 +627,7 @@ class Daemon:
     def drop_subscriber(self, conn):
         if conn in self.subscribers:
             self.subscribers.remove(conn)
+        self.partial.pop(conn, None)
         try:
             conn.close()
         except OSError:
@@ -688,11 +801,30 @@ class Daemon:
     # -- loop ------------------------------------------------------------
 
     def run(self):
-        os.makedirs(RUNDIR, exist_ok=True)
-        if os.path.exists(SOCKET):
-            os.unlink(SOCKET)
+        self.dirfd = open_rundir()
+        # A stale socket of ours is ours to clear. Anything else wearing that
+        # name is not, and removing it blindly is how a daemon deletes a file
+        # somebody else put there on purpose.
+        try:
+            st = os.lstat(SOCKET_NAME, dir_fd=self.dirfd)
+            if not stat.S_ISSOCK(st.st_mode):
+                sys.exit(f"{SOCKET} exists and is not a socket; refusing to replace it")
+            os.unlink(SOCKET_NAME, dir_fd=self.dirfd)
+        except FileNotFoundError:
+            pass
         srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        srv.bind(SOCKET)
+        # bind() takes a path and has no dir_fd form, so bind relative to the
+        # verified directory and step straight back out. The umask keeps the
+        # socket owner-only even though the directory is already 0700.
+        here = os.open(".", os.O_RDONLY | os.O_DIRECTORY)
+        old_umask = os.umask(0o077)
+        try:
+            os.fchdir(self.dirfd)
+            srv.bind(SOCKET_NAME)
+        finally:
+            os.umask(old_umask)
+            os.fchdir(here)
+            os.close(here)
         srv.listen(16)
         srv.setblocking(False)
 
@@ -734,6 +866,12 @@ class Daemon:
                         if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
                             raise
                         continue
+                    # Refuse rather than queue past the cap: a local client
+                    # holding connections open should hit a wall it can see,
+                    # not quietly consume the daemon's descriptors.
+                    if len(self.subscribers) + len(greeting) >= MAX_CLIENTS:
+                        conn.close()
+                        continue
                     conn.setblocking(False)
                     greeting[conn] = time.monotonic() + self.REQUEST_WAIT
                 elif sock in greeting:
@@ -751,6 +889,15 @@ class Daemon:
                     del greeting[conn]
                     conn.close()
 
+            # Nor is one that sends half a command and stops.
+            if self.partial:
+                now = time.monotonic()
+                for conn in [c for c, since in self.partial.items()
+                             if now - since > PARTIAL_LINE_WAIT]:
+                    self.partial.pop(conn, None)
+                    buffers.pop(conn, None)
+                    self.drop_subscriber(conn)
+
             now = time.monotonic()
             # A command's effect should show immediately, not on the next tick.
             if dirty or now - last_refresh >= 0.2:
@@ -762,11 +909,13 @@ class Daemon:
             conn.close()
         for conn in list(self.subscribers):
             self.drop_subscriber(conn)
-        for p in (SOCKET, STATE):
+        for name in (SOCKET_NAME, STATE_NAME):
             try:
-                os.unlink(p)
+                os.unlink(name, dir_fd=self.dirfd)
             except OSError:
                 pass
+        os.close(self.dirfd)
+        self.dirfd = None
         if self.hp:
             self.hp.close()
 
@@ -781,6 +930,13 @@ class Daemon:
             self.drop_subscriber(conn)
             return False
         buf = buffers.get(conn, b"") + chunk
+        # A command is a short line. Without this, a client that never sends a
+        # newline makes the daemon hold everything it has ever sent, and a
+        # handful of such connections is all it takes to exhaust memory.
+        if len(buf) > MAX_LINE:
+            self.drop_subscriber(conn)
+            buffers.pop(conn, None)
+            return False
         acted = False
         while b"\n" in buf:
             line, buf = buf.split(b"\n", 1)
@@ -795,7 +951,15 @@ class Daemon:
                 self.drop_subscriber(conn)
                 buffers.pop(conn, None)
                 return acted
-        buffers[conn] = buf
+        # Remember when an incomplete line first appeared. A subscriber that
+        # sits silent forever is normal and stays; a subscriber holding half a
+        # command is the shape this needs to let go of.
+        if buf:
+            buffers[conn] = buf
+            self.partial.setdefault(conn, time.monotonic())
+        else:
+            buffers.pop(conn, None)
+            self.partial.pop(conn, None)
         return acted
 
     def serve(self, conn):
@@ -838,5 +1002,32 @@ class Daemon:
         return reply.get("ok", False)
 
 
-if __name__ == "__main__":
+def main(argv=None):
+    """Configuration arrives as arguments, so the unit states it rather than
+    the daemon inheriting whatever it was handed."""
+    ap = argparse.ArgumentParser(
+        prog="mdrctld", description="Hold the Sony MDR control session.")
+    ap.add_argument("--mac", default="", metavar="AA:BB:CC:DD:EE:FF",
+                    help="pin to one headset; by default it takes whichever "
+                         "MDR device is connected")
+    ap.add_argument("--build-dir", default=None, metavar="DIR",
+                    help="where libmdr's shared objects are, for running out "
+                         "of a checkout; installed, they are found already")
+    ap.add_argument("--trace", default="", metavar="FILE",
+                    help="record every frame, command and publish here")
+    args = ap.parse_args(argv)
+
+    global MAC, BUILD, TRACE
+    MAC = args.mac
+    TRACE = args.trace
+    if args.build_dir:
+        BUILD = args.build_dir
+
+    if BUSCTL is None:
+        sys.exit("busctl not found in " + " or ".join(BUSCTL_CANDIDATES) +
+                 " -- install bluez and systemd")
     Daemon().run()
+
+
+if __name__ == "__main__":
+    main()

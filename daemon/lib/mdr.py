@@ -235,15 +235,20 @@ class Library:
         way it was put there.
         """
         import os
+        # Only what the caller passed and the packaged location. This used to
+        # consult MDR_BUILD, and consulted it *before* the packaged path, so
+        # anything that could set the environment of the long-lived daemon
+        # chose which shared objects it loaded -- which is to say, chose the
+        # code it ran. A checkout passes its own build directory explicitly.
         roots = [build_dir] if build_dir else []
-        roots += [os.environ.get("MDR_BUILD"), cls.PACKAGED]
+        roots += [cls.PACKAGED]
         for root in [r for r in roots if r]:
             for mdr_so, bt_so in cls.LAYOUTS:
                 if os.path.exists(os.path.join(root, mdr_so)):
                     return root, mdr_so, bt_so
         raise MDRError(
             "libmdr not found. Build it with scripts/build-libmdr.sh, install "
-            "the package, or point MDR_BUILD at a build directory")
+            "the package, or pass --build-dir")
 
     def __init__(self, build_dir=None):
         import os
