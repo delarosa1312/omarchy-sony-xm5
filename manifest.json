@@ -6,13 +6,36 @@
   "author": "delarosa1312",
   "license": "MIT",
   "description": "Battery and controls for the Sony WH-1000XM5 and WF-1000XM5",
-  "kinds": ["bar-widget"],
-  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
   "barWidget": {
     "displayName": "Sony XM5",
     "description": "Battery, noise control and equaliser for the WH-1000XM5 and WF-1000XM5",
     "category": "Audio",
     "allowMultiple": false,
-    "defaultSection": "right"
+    "defaultSection": "right",
+    "defaults": {
+      "name": "Sony XM5"
+    },
+    "schema": [
+      {
+        "key": "mac",
+        "type": "string",
+        "label": "Bluetooth address",
+        "description": "Only read while mdrctld is stopped, so BlueZ knows which device to report battery for. Leave empty while the daemon runs -- it reports its own address. Find yours with: bluetoothctl devices Connected",
+        "defaultValue": ""
+      },
+      {
+        "key": "name",
+        "type": "string",
+        "label": "Display name",
+        "description": "Shown in the panel header until the headset reports its own model.",
+        "defaultValue": "Sony XM5"
+      }
+    ]
   }
 }
