@@ -61,8 +61,11 @@ Not on Arch, or want it out of a checkout instead:
 
     ./scripts/install.sh
 
-which builds `libmdr`, writes the two user units pointing at your checkout,
-and does enable them.
+which builds `libmdr`, installs a copy to
+`${XDG_DATA_HOME:-~/.local/share}/mdrctl`, writes the two user units pointing
+at that copy, and starts them. The copy is the point: a service that runs
+straight out of a checkout changes what it will execute every time you pull or
+switch branch. Re-run the script after changing the code.
 
 **The widget**:
 
@@ -84,7 +87,13 @@ the bar with no readings and says what is missing when you click it.
 
 It runs nothing as root, opens no Bluetooth session from the panel, and starts
 no second Quickshell process. The daemon talks to the panel over a unix socket
-in `$XDG_RUNTIME_DIR`.
+in `$XDG_RUNTIME_DIR`, in a directory systemd creates for it at mode 0700.
+
+The daemon takes its settings as arguments -- `--mac`, `--build-dir`,
+`--trace` -- and the unit clears the rest of the environment. It used to read
+`MDR_BUILD`, `MDR_TRACE` and `MDR_MAC`, and `MDR_BUILD` chose which shared
+objects it loaded, which meant anything able to set the environment of a
+long-lived service chose the code it ran. See [docs/hardening.md](docs/hardening.md).
 
 
 ## Remove
@@ -173,6 +182,8 @@ is the point. The script also runs `omarchy plugin validate` and `qmllint`.
                                      the probing tools
     docs/protocol.md                 how this device family actually behaves
                                      on the wire, learned the hard way
+    docs/hardening.md                what the daemon trusts, and what it
+                                     stopped trusting
     PKGBUILD                         builds and installs the daemon
 
 The daemon is a dependency of the widget, not the other way round -- but it
