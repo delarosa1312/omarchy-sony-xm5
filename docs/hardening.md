@@ -91,19 +91,31 @@ survives.
 ## Where the code comes from
 
 **Was.** `scripts/install.sh` wrote a unit pointing `ExecStart` straight at the
-checkout. A service then executed a directory you edit, rebase and pull: an
-ordinary `git checkout` of another branch changed what the daemon would run on
-its next restart. The installer also used `enable --now`, which does nothing to
-a unit that is already active — so an upgrade left the previous build serving
-and reported success anyway.
+checkout, so a service executed a directory you edit, rebase and pull. The
+first answer to that staged a copy into `$XDG_DATA_HOME/mdrctl` and pointed the
+unit there, which was better but not actually the property being asked for:
+that directory is still writable by the user the daemon runs as.
 
-**Is.** The installer stages a copy into `${XDG_DATA_HOME:-~/.local/share}/mdrctl`
-and publishes it by rename, so an interrupted install cannot leave the unit
-pointing at a half-written tree. The unit runs that copy, with an absolute
-interpreter resolved at install time. It `restart`s rather than `--now`.
+**Is.** There is no install script. The package is the only path, and it
+installs to `/usr/bin/mdrctld` and `/usr/lib/mdrctl`, which that user cannot
+write to. Omarchy is Arch, so this costs nobody anything -- everyone who can
+install the widget already has `makepkg`, and the script was a worse duplicate
+of what the package does: not pacman-managed, not removable with `pacman -Rns`.
 
-The Arch package was already installing to `/usr/bin` and `/usr/lib/mdrctl`; it
-fills the same unit template with those fixed paths.
+The scripts were removed for a second reason worth recording, because it says
+something about fixing things to satisfy a checker. `scripts/build-libmdr.sh`
+fetched the upstream library, and the marketplace baseline reported it as
+`remote-git-execution-unpinned` through four attempts -- including one where
+the fetch named a literal URL and a literal 40-character commit and checked it
+out detached, which is its own stated fix, written out. The matcher objects to
+fetch-then-build as a shape, not to how it is pinned. The honest move at that
+point was not a fifth wording but to ask who the script was for, and the answer
+was nobody: it served non-Arch users of a plugin that only installs on Arch.
+
+`makepkg` still builds that upstream commit, pinned in the `PKGBUILD` source
+array. The build did not disappear; it stopped being expressed as a shell
+script. If that is ever read the same way, the real escape is a daemon with no
+C++ dependency at all.
 
 ## The rest of the unit
 

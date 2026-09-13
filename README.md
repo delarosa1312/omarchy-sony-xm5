@@ -57,15 +57,12 @@ on yourself -- the install prints this too:
 
     systemctl --user enable --now mdrctld mpris-proxy
 
-Not on Arch, or want it out of a checkout instead:
-
-    ./scripts/install.sh
-
-which builds `libmdr`, installs a copy to
-`${XDG_DATA_HOME:-~/.local/share}/mdrctl`, writes the two user units pointing
-at that copy, and starts them. The copy is the point: a service that runs
-straight out of a checkout changes what it will execute every time you pull or
-switch branch. Re-run the script after changing the code.
+That is the only install path, and it is enough: Omarchy is Arch, so everyone
+who can install the widget already has `makepkg`. The package puts the daemon
+in `/usr/bin` and its libraries in `/usr/lib/mdrctl`, which the user the
+service runs as cannot write to -- a service that ran out of a checkout, or
+out of anywhere under `$HOME`, would change what it executes every time you
+pulled.
 
 **The widget**:
 
@@ -102,13 +99,13 @@ The widget:
 
     omarchy plugin remove io.github.delarosa1312.sony-xm5
 
-The daemon, whichever way it went on:
+The daemon:
 
-    sudo pacman -Rns mdrctl      # the package
-    ./scripts/uninstall.sh       # a checkout
+    systemctl --user disable --now mdrctld mpris-proxy
+    sudo pacman -Rns mdrctl
 
-Either stops the user services first, so the headset's control session is
-handed back rather than held until you log out.
+Stop the services first so the headset's control session is handed back rather
+than held until you log out.
 
 ## Place it on the bar
 
@@ -186,9 +183,11 @@ is the point. The script also runs `omarchy plugin validate` and `qmllint`.
                                      stopped trusting
     PKGBUILD                         builds and installs the daemon
 
-The daemon is a dependency of the widget, not the other way round -- but it
-stands on its own. `mdrctl status`, `mdrctl mode ambient` and the rest work on
-any Linux with BlueZ, with no Omarchy and no bar in sight.
+The daemon is a dependency of the widget, not the other way round. `mdrctl
+status`, `mdrctl mode ambient` and the rest are useful on their own, with no
+bar in sight -- but the packaging targets Arch, because Omarchy is Arch and
+that is who this is for. Nothing in the daemon is Arch-specific if you want to
+build it elsewhere; there is simply no script here that will do it for you.
 
 ## License
 

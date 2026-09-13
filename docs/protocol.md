@@ -18,7 +18,7 @@ it from Python with ctypes:
 - no C++ of our own to maintain
 - no third-party plugin running unsandboxed inside the shell
 
-Upstream is pinned to a commit in `scripts/build-libmdr.sh`.
+Upstream is pinned to a commit in the `PKGBUILD`.
 
 ## Shape
 

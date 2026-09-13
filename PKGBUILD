@@ -1,6 +1,6 @@
 # Maintainer: delarosa1312 <65927195+delarosa1312@users.noreply.github.com>
 pkgname=mdrctl
-pkgver=1.1.2
+pkgver=1.1.3
 pkgrel=1
 pkgdesc="Control Sony MDR headphones (WH-1000XM5, WF-1000XM5) from Linux, with an Omarchy bar widget"
 arch=('x86_64' 'aarch64')
