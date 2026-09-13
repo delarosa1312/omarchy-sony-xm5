@@ -1,6 +1,6 @@
 # Maintainer: delarosa1312 <65927195+delarosa1312@users.noreply.github.com>
 pkgname=mdrctl
-pkgver=1.1.1
+pkgver=1.1.2
 pkgrel=1
 pkgdesc="Control Sony MDR headphones (WH-1000XM5, WF-1000XM5) from Linux, with an Omarchy bar widget"
 arch=('x86_64' 'aarch64')
@@ -14,10 +14,16 @@ options=('!debug')
 
 # The upstream library is built here rather than vendored: nothing in it is
 # modified, so there is no fork to keep up with -- only a commit to pin.
+#
+# Spelled out in the source array rather than passed through $_mdrcommit: a
+# variable is resolved by makepkg, not by whoever is reading the file to decide
+# whether it is safe. _mdrcommit stays as the canonical copy and scripts/test
+# holds every other occurrence against it. Our own repo is fetched by tag
+# because a commit cannot name itself from inside its own tree.
 _mdrcommit=965c458116d40827494726447de5f07eb50efcb8
 source=(
   "$pkgname::git+https://github.com/delarosa1312/omarchy-sony-xm5.git#tag=v$pkgver"
-  "git+https://github.com/mos9527/SonyHeadphonesClient.git#commit=$_mdrcommit"
+  "git+https://github.com/mos9527/SonyHeadphonesClient.git#commit=965c458116d40827494726447de5f07eb50efcb8"
 )
 sha256sums=('SKIP' 'SKIP')
 

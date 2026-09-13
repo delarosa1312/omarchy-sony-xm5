@@ -62,12 +62,17 @@ if [[ ! $mdrcommit =~ ^[0-9a-f]{40}$ ]]; then
   echo "PKGBUILD _mdrcommit is not a full 40-character SHA: $mdrcommit" >&2
   status=1
 else
-  stray=$(grep -oE '\b[0-9a-f]{40}\b' "$ROOT/scripts/build-libmdr.sh" | sort -u | grep -v "^$mdrcommit$" || true)
+  # Every file that names the upstream commit, not just the build script: it is
+  # written out in full in several places now so a reader can verify the pin
+  # without resolving a variable, and copies drift.
+  stray=$(grep -ohE '\b[0-9a-f]{40}\b' "$ROOT/scripts/build-libmdr.sh" "$ROOT/PKGBUILD" "$ROOT/.SRCINFO" \
+          | sort -u | grep -v "^$mdrcommit$" || true)
   if [ -n "$stray" ]; then
-    echo "build-libmdr.sh pins a commit the PKGBUILD does not: $stray" >&2
+    echo "a file pins an upstream commit the PKGBUILD does not: $stray" >&2
     status=1
   else
-    echo "upstream pinned to $mdrcommit in PKGBUILD and build-libmdr.sh"
+    n=$(grep -ohE "\b$mdrcommit\b" "$ROOT/scripts/build-libmdr.sh" "$ROOT/PKGBUILD" "$ROOT/.SRCINFO" | wc -l)
+    echo "upstream pinned to $mdrcommit, spelled out $n times, all agreeing"
   fi
 fi
 

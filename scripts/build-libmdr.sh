@@ -11,22 +11,33 @@
 # say the same thing.
 set -euo pipefail
 
-UPSTREAM="https://github.com/mos9527/SonyHeadphonesClient"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/vendor/SonyHeadphonesClient"
 
 command -v cmake >/dev/null || { echo "need cmake" >&2; exit 1; }
 command -v ninja >/dev/null || { echo "need ninja" >&2; exit 1; }
 
-# init and fetch that one commit, rather than clone: a clone takes the default
-# branch first, and a branch can move after somebody reviewed it. GitHub serves
-# a reachable SHA directly, so no branch is ever named here.
-mkdir -p "$SRC"
-[[ -d $SRC/.git ]] || git -C "$SRC" init -q
-git -C "$SRC" remote get-url origin >/dev/null 2>&1 \
-  || git -C "$SRC" remote add origin "$UPSTREAM"
-git -C "$SRC" fetch --depth 1 origin 965c458116d40827494726447de5f07eb50efcb8
-git -C "$SRC" checkout -q --detach 965c458116d40827494726447de5f07eb50efcb8
+# The URL and the commit are both written out, in full, on the line that
+# fetches them. Earlier versions pinned the commit but reached it through a
+# remote named "origin" whose URL came from a variable -- so the commit was
+# fixed and the *source* was not, at least to anything reading this file
+# without running it. "Which repository" deserves the same treatment as
+# "which commit"; git fetches a URL directly, so no remote is needed at all.
+# vendor/ is a build artifact directory, disposable and gitignored, so the only
+# thing that matters is that it ends up holding exactly this commit. An
+# interrupted earlier run leaves untracked files that make checkout refuse;
+# rather than abort on somebody's half-finished build, take it from the top.
+fetch_upstream() {
+  mkdir -p "$SRC"
+  [[ -d $SRC/.git ]] || git -C "$SRC" init -q
+  git -C "$SRC" fetch --depth 1 https://github.com/mos9527/SonyHeadphonesClient 965c458116d40827494726447de5f07eb50efcb8
+  git -C "$SRC" checkout --detach 965c458116d40827494726447de5f07eb50efcb8
+}
+if ! fetch_upstream 2>/dev/null; then
+  echo "== clearing a half-finished checkout and refetching =="
+  rm -rf "$SRC"
+  fetch_upstream
+fi
 
 # A compiler is about to run over this directory, so prove what is in it.
 head=$(git -C "$SRC" rev-parse HEAD)
