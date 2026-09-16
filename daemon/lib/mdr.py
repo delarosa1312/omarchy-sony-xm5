@@ -21,6 +21,7 @@ PROTOCOL_V2 = 2
 
 RESULT_OK = 0
 RESULT_INPROGRESS = 1
+RESULT_ERROR_TIMEOUT = 4
 
 AVAILABILITY = {0: "unknown", 1: "unavailable", 2: "available"}
 
@@ -369,7 +370,10 @@ class Headphones:
         deadline, state = time.monotonic() + link_timeout, RESULT_INPROGRESS
         while time.monotonic() < deadline:
             state = lib.conn_poll(self._conn, 100)
-            if state != RESULT_INPROGRESS:
+            # A Linux poll timeout only means this 100 ms slice elapsed;
+            # the asynchronous RFCOMM connect may still complete. Honor the
+            # overall link deadline instead of aborting the first quiet poll.
+            if state not in (RESULT_INPROGRESS, RESULT_ERROR_TIMEOUT):
                 break
         if state != RESULT_OK:
             err = lib.last_error(self._conn)

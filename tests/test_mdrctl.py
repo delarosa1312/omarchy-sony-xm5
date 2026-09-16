@@ -334,6 +334,49 @@ class BatteryTest(unittest.TestCase):
         self.assertIsNone(mdrctld.headline_battery([]))
 
 
+class ConnectPollingTest(unittest.TestCase):
+    def headphones(self, results):
+        lib = mock.Mock()
+        lib.conn_get.return_value = 1
+        lib.connect.return_value = mdr.RESULT_INPROGRESS
+        lib.conn_poll.side_effect = results
+        lib.hp_create.return_value = mdr.RESULT_OK
+        lib.hp_ready.return_value = True
+        lib.last_error.return_value = b"Connecting to remote device"
+        lib.result.side_effect = lambda code: f"result-{code}"
+        hp = mdr.Headphones(lib, "00:11:22:33:44:55")
+        hp.pump = mock.Mock()
+        self.addCleanup(hp.close)
+        return hp, lib
+
+    def test_quiet_poll_does_not_abort_pending_connection(self):
+        hp, lib = self.headphones([
+            mdr.RESULT_INPROGRESS, mdr.RESULT_ERROR_TIMEOUT,
+            mdr.RESULT_ERROR_TIMEOUT, mdr.RESULT_OK,
+        ])
+        hp.open(settle=0)
+        self.assertEqual(lib.conn_poll.call_count, 4)
+        lib.hp_create.assert_called_once()
+        lib.disconnect.assert_not_called()
+
+    def test_poll_timeout_still_obeys_overall_deadline(self):
+        hp, lib = self.headphones([mdr.RESULT_ERROR_TIMEOUT])
+        with mock.patch.object(mdr.time, "monotonic", side_effect=[0, 0, 6]):
+            with self.assertRaisesRegex(mdr.MDRError, "link failed"):
+                hp.open(link_timeout=5, settle=0)
+        lib.hp_create.assert_not_called()
+        lib.disconnect.assert_called_once()
+        lib.conn_destroy.assert_called_once()
+
+    def test_permanent_error_closes_without_retrying(self):
+        hp, lib = self.headphones([3])
+        with self.assertRaisesRegex(mdr.MDRError, "link failed"):
+            hp.open(settle=0)
+        self.assertEqual(lib.conn_poll.call_count, 1)
+        lib.hp_create.assert_not_called()
+        lib.disconnect.assert_called_once()
+
+
 class ExplainTest(unittest.TestCase):
     """The transport says EBUSY; the user needs to know the headset only has
     one control channel and something else is holding it."""

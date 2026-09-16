@@ -1,7 +1,7 @@
 # Maintainer: delarosa1312 <65927195+delarosa1312@users.noreply.github.com>
 pkgname=mdrctl
 pkgver=1.1.3
-pkgrel=1
+pkgrel=3
 pkgdesc="Control Sony MDR headphones (WH-1000XM5, WF-1000XM5) from Linux, with an Omarchy bar widget"
 arch=('x86_64' 'aarch64')
 url="https://github.com/delarosa1312/omarchy-sony-xm5"
@@ -24,8 +24,14 @@ _mdrcommit=965c458116d40827494726447de5f07eb50efcb8
 source=(
   "$pkgname::git+https://github.com/delarosa1312/omarchy-sony-xm5.git#tag=v$pkgver"
   "git+https://github.com/mos9527/SonyHeadphonesClient.git#commit=965c458116d40827494726447de5f07eb50efcb8"
+  # The released tag predates the connection-poll fix.
+  "fix-connection-poll.patch"
 )
-sha256sums=('SKIP' 'SKIP')
+sha256sums=('SKIP' 'SKIP' '20b47983858b1f5a1d3a03feeb9a8c1f3fa3bae9eab437fc763ba8553663111d')
+
+prepare() {
+  patch -d "$srcdir/$pkgname" -Np1 < "$srcdir/fix-connection-poll.patch"
+}
 
 build() {
   # MDR_BUILD_CLIENT=OFF skips the GLFW/ImGui GUI: only the protocol and the
@@ -34,7 +40,9 @@ build() {
     -DCMAKE_BUILD_TYPE=Release \
     -DMDR_BUILD_CLIENT=OFF \
     -DBUILD_SHARED_LIBS=ON
-  cmake --build "$srcdir/build"
+  # Ninja otherwise uses every CPU, which can exhaust memory while compiling
+  # the generated protocol sources. Allow an explicit override for builders.
+  cmake --build "$srcdir/build" --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
 }
 
 package() {
@@ -51,8 +59,8 @@ package() {
   install -Dm755 "$pkgname/daemon/bin/mdrctl" "$pkgdir/usr/bin/mdrctl"
   install -Dm755 "$pkgname/daemon/bin/mdrctld" "$pkgdir/usr/bin/mdrctld"
 
-  install -Dm644 "$pkgname/daemon/systemd-user/mpris-proxy.service" \
-    "$pkgdir/usr/lib/systemd/user/mpris-proxy.service"
+  # bluez-utils already owns mpris-proxy.service. Shipping our own copy makes
+  # pacman reject the transaction with a conflicting-files error.
   # The unit template carries @PYTHON@/@MDRCTLD@/@ARGS@ so a checkout can point
   # them at itself. Installed, both are fixed absolute paths and libmdr is found
   # at /usr/lib/mdrctl without being told, so there are no arguments to pass.

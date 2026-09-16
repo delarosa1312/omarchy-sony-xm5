@@ -57,6 +57,22 @@ on yourself -- the install prints this too:
 
     systemctl --user enable --now mdrctld mpris-proxy
 
+`mpris-proxy.service` is provided by the `bluez-utils` dependency; this package
+only installs `mdrctld.service`. If an older build fails with
+`mpris-proxy.service exists in filesystem (owned by bluez-utils)`, update this
+checkout and rebuild with `makepkg --cleanbuild --install`. Do not overwrite
+the file owned by `bluez-utils`.
+
+Builds use two compiler jobs by default to limit memory use. On a machine
+with little available memory, use
+`CMAKE_BUILD_PARALLEL_LEVEL=1 makepkg --cleanbuild --install`.
+
+If the headset is connected but the panel says "No control session", rebuild
+with package release `1.1.3-3` or later and restart `mdrctld`. Earlier builds
+could abandon an asynchronous Bluetooth connection after a single 100 ms
+poll timeout, then incorrectly suggest that another device held the channel.
+The corrected binding waits for the full connection deadline.
+
 That is the only install path, and it is enough: Omarchy is Arch, so everyone
 who can install the widget already has `makepkg`. The package puts the daemon
 in `/usr/bin` and its libraries in `/usr/lib/mdrctl`, which the user the

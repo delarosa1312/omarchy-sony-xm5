@@ -1,0 +1,12 @@
+diff --git a/daemon/lib/mdr.py b/daemon/lib/mdr.py
+index 4b41a45..69ca1a8 100644
+--- a/daemon/lib/mdr.py
++++ b/daemon/lib/mdr.py
+@@ -23,0 +24 @@ RESULT_INPROGRESS = 1
++RESULT_ERROR_TIMEOUT = 4
+@@ -372 +373,4 @@ class Headphones:
+-            if state != RESULT_INPROGRESS:
++            # A Linux poll timeout only means this 100 ms slice elapsed;
++            # the asynchronous RFCOMM connect may still complete. Honor the
++            # overall link deadline instead of aborting the first quiet poll.
++            if state not in (RESULT_INPROGRESS, RESULT_ERROR_TIMEOUT):
