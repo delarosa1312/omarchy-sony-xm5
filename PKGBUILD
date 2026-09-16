@@ -6,7 +6,8 @@ pkgdesc="Control Sony MDR headphones (WH-1000XM5, WF-1000XM5) from Linux, with a
 arch=('x86_64' 'aarch64')
 url="https://github.com/delarosa1312/omarchy-sony-xm5"
 license=('MIT')
-depends=('python' 'bluez' 'bluez-utils' 'dbus')
+# Arch started shipping mpris-proxy.service in bluez-utils 5.79-1.
+depends=('python' 'bluez' 'bluez-utils>=5.79' 'dbus')
 makedepends=('cmake' 'ninja' 'git' 'gcc')
 optdepends=('omarchy: the bar widget this daemon drives')
 install=mdrctl.install
@@ -64,7 +65,7 @@ package() {
   install -Dm755 "$pkgname/daemon/bin/mdrctl" "$pkgdir/usr/bin/mdrctl"
   install -Dm755 "$pkgname/daemon/bin/mdrctld" "$pkgdir/usr/bin/mdrctld"
 
-  # bluez-utils already owns mpris-proxy.service. Shipping our own copy makes
+  # bluez-utils>=5.79 owns mpris-proxy.service. Shipping our own copy makes
   # pacman reject the transaction with a conflicting-files error.
   # The unit template carries @PYTHON@/@MDRCTLD@/@ARGS@ so a checkout can point
   # them at itself. Installed, both are fixed absolute paths and libmdr is found

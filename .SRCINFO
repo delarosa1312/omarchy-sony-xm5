@@ -13,7 +13,7 @@ pkgbase = mdrctl
 	makedepends = gcc
 	depends = python
 	depends = bluez
-	depends = bluez-utils
+	depends = bluez-utils>=5.79
 	depends = dbus
 	optdepends = omarchy: the bar widget this daemon drives
 	options = !debug

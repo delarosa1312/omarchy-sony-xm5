@@ -49,7 +49,7 @@ handshake costs seconds.
 
     git clone https://github.com/delarosa1312/omarchy-sony-xm5.git
     cd omarchy-sony-xm5
-    makepkg --cleanbuild --install
+    makepkg --syncdeps --cleanbuild --install
 
 That builds `libmdr` from [SonyHeadphonesClient][upstream] and installs
 `mdrctl` and `mdrctld`. Packages do not start services on Arch, so turn them
@@ -57,15 +57,19 @@ on yourself -- the install prints this too:
 
     systemctl --user enable --now mdrctld mpris-proxy
 
-`mpris-proxy.service` is provided by the `bluez-utils` dependency; this package
-only installs `mdrctld.service`. If an older build fails with
+`mpris-proxy.service` is provided by `bluez-utils>=5.79`, an explicit package
+dependency. Arch began including the unit in
+[5.79-1](https://gitlab.archlinux.org/archlinux/packaging/packages/bluez/-/commit/b698a3d5dfa06597c00bbd70a345e0b70631c8cd),
+so a fresh installation obtains it from that dependency too. This package
+only installs `mdrctld.service`; its contents do not depend on files already
+present on the build machine. If an older build fails with
 `mpris-proxy.service exists in filesystem (owned by bluez-utils)`, update this
-checkout and rebuild with `makepkg --cleanbuild --install`. Do not overwrite
+checkout and rebuild with `makepkg --syncdeps --cleanbuild --install`. Do not overwrite
 the file owned by `bluez-utils`.
 
 Builds use two compiler jobs by default to limit memory use. On a machine
 with little available memory, use
-`CMAKE_BUILD_PARALLEL_LEVEL=1 makepkg --cleanbuild --install`.
+`CMAKE_BUILD_PARALLEL_LEVEL=1 makepkg --syncdeps --cleanbuild --install`.
 
 If the headset is connected but the panel says "No control session", rebuild
 with package release `1.1.3-3` or later and restart `mdrctld`. Earlier builds
