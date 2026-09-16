@@ -49,13 +49,39 @@ handshake costs seconds.
 
     git clone https://github.com/delarosa1312/omarchy-sony-xm5.git
     cd omarchy-sony-xm5
-    makepkg --cleanbuild --install
+    makepkg --syncdeps --cleanbuild --install
 
 That builds `libmdr` from [SonyHeadphonesClient][upstream] and installs
 `mdrctl` and `mdrctld`. Packages do not start services on Arch, so turn them
 on yourself -- the install prints this too:
 
     systemctl --user enable --now mdrctld mpris-proxy
+
+`mpris-proxy.service` is provided by `bluez-utils>=5.79`, an explicit package
+dependency. Arch began including the unit in
+[5.79-1](https://gitlab.archlinux.org/archlinux/packaging/packages/bluez/-/commit/b698a3d5dfa06597c00bbd70a345e0b70631c8cd),
+so a fresh installation obtains it from that dependency too. This package
+only installs `mdrctld.service`; its contents do not depend on files already
+present on the build machine. If an older build fails with
+`mpris-proxy.service exists in filesystem (owned by bluez-utils)`, update this
+checkout and rebuild with `makepkg --syncdeps --cleanbuild --install`. Do not overwrite
+the file owned by `bluez-utils`.
+
+Builds use two compiler jobs by default to limit memory use. On a machine
+with little available memory, use
+`CMAKE_BUILD_PARALLEL_LEVEL=1 makepkg --syncdeps --cleanbuild --install`.
+
+If the headset is connected but the panel says "No control session", rebuild
+with package release `1.1.3-3` or later and restart `mdrctld`. Earlier builds
+could abandon an asynchronous Bluetooth connection after a single 100 ms
+poll timeout, then incorrectly suggest that another device held the channel.
+The corrected binding waits for the full connection deadline.
+
+For changes that stop applying during an active session, use release
+`1.1.3-4` or later: it submits edits made while another command is in flight
+and fixes libmdr's ACK retry timer to use elapsed time instead of CPU time.
+Restart `mdrctld` after upgrading. The widget also needs the subscription
+flush fix from this repository; update the installed plugin as well.
 
 That is the only install path, and it is enough: Omarchy is Arch, so everyone
 who can install the widget already has `makepkg`. The package puts the daemon
@@ -192,6 +218,6 @@ build it elsewhere; there is simply no script here that will do it for you.
 ## License
 
 MIT. The upstream library it builds, [SonyHeadphonesClient][upstream], is MIT
-too, and is not modified -- only a commit is pinned.
+too. Its commit is pinned and a small patch fixes its retry clock.
 
 [upstream]: https://github.com/mos9527/SonyHeadphonesClient

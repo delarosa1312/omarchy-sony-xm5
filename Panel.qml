@@ -10,7 +10,7 @@ import "Model.js" as Model
 // Sony WH-1000XM5 panel.
 //
 // Every fact here comes from mdrctld's state file, and every change goes out
-// through the mdrctl CLI. The daemon owns the Bluetooth session because the
+// through the daemon's Unix socket. The daemon owns the Bluetooth session because the
 // device allows exactly one and the handshake costs seconds -- this panel must
 // never try to open its own.
 Panel {
@@ -34,6 +34,8 @@ Panel {
   // simply nothing to read, which is what needsSetup already says out loud.
   readonly property string runDir: Quickshell.env("XDG_RUNTIME_DIR")
   readonly property string statePath: runDir ? runDir + "/mdrctl/state.json" : ""
+  readonly property var link: linkLoader.item
+  readonly property bool commandConnected: link !== null && link.connected
 
   property var state: ({})
   property real nowSec: 0
@@ -93,7 +95,7 @@ Panel {
   // Latched, so a restart of the daemon does not flash a setup prompt at
   // somebody who plainly already has it.
   property bool daemonSeen: false
-  readonly property bool needsSetup: !daemonSeen && !link.connected && !fresh
+  readonly property bool needsSetup: !daemonSeen && !commandConnected && !fresh
   // A daemon that answers at all counts, session or not: someone who has it
   // installed but has never switched the headphones on must not be told to
   // go and install it.
@@ -273,7 +275,7 @@ Panel {
   // it had worked while the daemon was down: the control moved, held for five
   // seconds and then snapped back, with nothing said about why.
   function send(args, field, value) {
-    if (!link.connected) return false
+    if (!commandConnected) return false
     link.write(args.join(" ") + "\n")
     link.flush()
     if (field !== undefined) claimField(field, value)
@@ -378,25 +380,36 @@ Panel {
 
   // The daemon pushes every change down this socket, so there is nothing to
   // poll and a click shows up as fast as the device answers.
-  Socket {
-    id: link
-    path: root.runDir ? root.runDir + "/mdrctl/sock" : ""
-    connected: root.runDir !== ""
-    onConnectedChanged: {
-      if (connected) {
-        root.daemonSeen = true
-        write("subscribe\n")
+  Loader {
+    id: linkLoader
+    active: root.runDir !== ""
+    // A failed initial connection can leave Socket holding an unconnected
+    // QLocalSocket. Setting connected=true again does not retry that object.
+    // Recreate it after errors so daemon restarts cannot leave a read-only UI.
+    sourceComponent: Socket {
+      path: root.runDir ? root.runDir + "/mdrctl/sock" : ""
+      connected: root.runDir !== ""
+      onError: Qt.callLater(function() { linkLoader.active = false })
+      onConnectedChanged: {
+        if (connected) {
+          root.daemonSeen = true
+          write("subscribe\n")
+          // Socket.write queues data until flush(). Without this greeting the
+          // daemon closes the idle connection, or receives subscribe and the
+          // first command together instead of establishing a subscription.
+          flush()
+        }
       }
-    }
 
-    parser: SplitParser {
-      splitMarker: "\n"
-      onRead: function(line) {
-        try {
-          var msg = JSON.parse(line)
-          if (msg.state) root.applyState(msg.state)
-        } catch (e) {
-          return
+      parser: SplitParser {
+        splitMarker: "\n"
+        onRead: function(line) {
+          try {
+            var msg = JSON.parse(line)
+            if (msg.state) root.applyState(msg.state)
+          } catch (e) {
+            return
+          }
         }
       }
     }
@@ -409,8 +422,8 @@ Panel {
     path: root.statePath
     watchChanges: true
     printErrors: false
-    onLoaded: if (!link.connected) root.parseState(text())
-    onFileChanged: if (!link.connected) reload()
+    onLoaded: if (!root.commandConnected) root.parseState(text())
+    onFileChanged: if (!root.commandConnected) reload()
     onLoadFailed: root.state = ({})
   }
 
@@ -423,8 +436,9 @@ Panel {
     triggeredOnStart: true
     onTriggered: {
       root.nowSec = Date.now() / 1000
-      if (root.runDir !== "" && !link.connected) {
-        link.connected = true
+      if (root.runDir !== "" && !root.commandConnected) {
+        linkLoader.active = true
+        if (root.link) root.link.connected = true
         stateFile.reload()
       }
     }
@@ -446,7 +460,11 @@ Panel {
 
   Process {
     id: daemonCmd
-    onExited: { link.connected = true; stateFile.reload() }
+    onExited: {
+      linkLoader.active = true
+      if (root.link) root.link.connected = true
+      stateFile.reload()
+    }
   }
 
   KeyboardPanel {

@@ -1,0 +1,59 @@
+diff --git a/daemon/lib/mdr.py b/daemon/lib/mdr.py
+index 4b41a45..2513a66 100644
+--- a/daemon/lib/mdr.py
++++ b/daemon/lib/mdr.py
+@@ -23,0 +24 @@ RESULT_INPROGRESS = 1
++RESULT_ERROR_TIMEOUT = 4
+@@ -280,0 +282 @@ class Library:
++        self.hp_dirty = sig(self.mdr, "mdrHeadphonesIsDirty", u32, p)
+@@ -372 +374,4 @@ class Headphones:
+-            if state != RESULT_INPROGRESS:
++            # A Linux poll timeout only means this 100 ms slice elapsed;
++            # the asynchronous RFCOMM connect may still complete. Honor the
++            # overall link deadline instead of aborting the first quiet poll.
++            if state not in (RESULT_INPROGRESS, RESULT_ERROR_TIMEOUT):
+@@ -389,9 +394,9 @@ class Headphones:
+-        lib.hp_init(self._hp)
+-        deadline = time.monotonic() + ready_timeout
+-        while time.monotonic() < deadline:
+-            self.pump()
+-            if lib.hp_ready(self._hp):
+-                break
+-        else:
+-            self.close()
+-            raise MDRError("headphones never became ready (is another device holding the link?)")
++        try:
++            lib.hp_init(self._hp)
++            deadline = time.monotonic() + ready_timeout
++            while time.monotonic() < deadline:
++                self.pump()
++                if lib.hp_ready(self._hp):
++                    break
++            else:
++                raise MDRError("headphones never became ready (is another device holding the link?)")
+@@ -399,4 +404,9 @@ class Headphones:
+-        lib.hp_sync(self._hp)
+-        deadline = time.monotonic() + settle
+-        while time.monotonic() < deadline:
+-            self.pump(50)
++            lib.hp_sync(self._hp)
++            deadline = time.monotonic() + settle
++            while time.monotonic() < deadline:
++                self.pump(50)
++        except MDRError:
++            # Polling can now report protocol errors during initialization too.
++            # Do not leave a half-open session holding the headset's channel.
++            self.close()
++            raise
+@@ -407 +417,10 @@ class Headphones:
+-        self.lib.hp_poll(self._hp, C.cast(self._event, C.c_void_p))
++        result = self.lib.hp_poll(self._hp, C.cast(self._event, C.c_void_p))
++        if result not in (RESULT_OK, RESULT_INPROGRESS):
++            raise MDRError(f"protocol polling failed: {self.lib.result(result)}")
++        # RequestCommit does not queue a request when another task is active.
++        # Preserve staged edits by submitting them once that task completes,
++        # as the upstream client does in its event loop.
++        if self.lib.hp_ready(self._hp) and self.lib.hp_dirty(self._hp):
++            result = self.lib.hp_commit(self._hp)
++            if result not in (RESULT_OK, RESULT_INPROGRESS):
++                raise MDRError(f"pending write failed: {self.lib.result(result)}")
