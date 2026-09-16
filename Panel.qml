@@ -10,7 +10,7 @@ import "Model.js" as Model
 // Sony WH-1000XM5 panel.
 //
 // Every fact here comes from mdrctld's state file, and every change goes out
-// through the mdrctl CLI. The daemon owns the Bluetooth session because the
+// through the daemon's Unix socket. The daemon owns the Bluetooth session because the
 // device allows exactly one and the handshake costs seconds -- this panel must
 // never try to open its own.
 Panel {
@@ -386,6 +386,10 @@ Panel {
       if (connected) {
         root.daemonSeen = true
         write("subscribe\n")
+        // Socket.write queues data until flush(). Without this greeting the
+        // daemon closes the idle connection, or receives subscribe and the
+        // first command together instead of establishing a subscription.
+        flush()
       }
     }
 
