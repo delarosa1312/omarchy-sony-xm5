@@ -11,11 +11,11 @@ The widget and its install live in the [README](../README.md).
 
 The upstream [SonyHeadphonesClient](https://github.com/mos9527/SonyHeadphonesClient)
 (MIT) separates the protocol into a library from the GUI built on it, and the
-library exposes a plain C interface. So we build that library unmodified and call
-it from Python with ctypes:
+library exposes a plain C interface. We build it with a small patch for its
+retry clock and call it from Python with ctypes:
 
 - no fork to keep in sync with upstream
-- no C++ of our own to maintain
+- a small timer patch against the pinned C++ source
 - no third-party plugin running unsandboxed inside the shell
 
 Upstream is pinned to a commit in the `PKGBUILD`.
@@ -114,7 +114,25 @@ wearing detection, auto pause, speak-to-chat and shutdown come back
 *available*. The widget hides anything unavailable rather than offering a
 control that cannot work.
 
-### The device does acknowledge every command
+### Event-loop writes and ACK deadlines
+
+`mdrHeadphonesRequestCommit()` returns INPROGRESS while a previous task is
+active; it does not queue another commit. The Python event loop must check
+`mdrHeadphonesIsReady()` and `mdrHeadphonesIsDirty()` after polling and submit
+the staged edits when ready, just as the upstream GUI does. Otherwise a rapid
+second mode change is never sent, even though the daemon claims it locally.
+
+The pinned library also measured ACK deadlines with `clock()`, which counts
+CPU time. A daemon sleeping between polls could wait minutes for a one-second
+retry. `fix-mdr-wall-clock.patch` uses `std::chrono::steady_clock` instead.
+The optional native test models a silent transport and a sleeping caller:
+
+    MDR_TEST_BUILD="$PWD/src/build" python -m unittest discover -s tests -p test_native_timeout.py -v
+
+An ACK and the daemon's claimed state alone are insufficient validation:
+repeat writes and reconnect to confirm what the hardware actually retained.
+
+### Packet acknowledgements
 
 `mdrHeadphonesSetPacketCallback` exposes the wire, and a frame is
 `[start][data type][seq][len:4][payload][checksum][end]`. Type 1 inbound is an

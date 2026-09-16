@@ -334,6 +334,45 @@ class BatteryTest(unittest.TestCase):
         self.assertIsNone(mdrctld.headline_battery([]))
 
 
+class PendingWriteTest(unittest.TestCase):
+    def headphones(self):
+        lib = mock.Mock()
+        lib.hp_poll.return_value = mdr.RESULT_OK
+        lib.hp_commit.return_value = mdr.RESULT_OK
+        lib.hp_ready.return_value = True
+        lib.hp_dirty.return_value = True
+        lib.result.side_effect = lambda code: f"result-{code}"
+        hp = mdr.Headphones(lib, "00:11:22:33:44:55")
+        return hp, lib
+
+    def test_pending_edit_is_submitted_after_busy_task_finishes(self):
+        hp, lib = self.headphones()
+        lib.hp_ready.side_effect = [False, True]
+        hp.pump(0)
+        lib.hp_commit.assert_not_called()
+        hp.pump(0)
+        lib.hp_commit.assert_called_once()
+
+    def test_clean_state_does_not_send_another_commit(self):
+        hp, lib = self.headphones()
+        lib.hp_dirty.return_value = False
+        hp.pump(0)
+        lib.hp_commit.assert_not_called()
+
+    def test_protocol_failure_is_not_silently_ignored(self):
+        hp, lib = self.headphones()
+        lib.hp_poll.return_value = mdr.RESULT_ERROR_TIMEOUT
+        with self.assertRaisesRegex(mdr.MDRError, "protocol polling failed"):
+            hp.pump(0)
+        lib.hp_commit.assert_not_called()
+
+    def test_pending_commit_failure_is_reported(self):
+        hp, lib = self.headphones()
+        lib.hp_commit.return_value = 3
+        with self.assertRaisesRegex(mdr.MDRError, "pending write failed"):
+            hp.pump(0)
+
+
 class ConnectPollingTest(unittest.TestCase):
     def headphones(self, results):
         lib = mock.Mock()
@@ -375,6 +414,15 @@ class ConnectPollingTest(unittest.TestCase):
         self.assertEqual(lib.conn_poll.call_count, 1)
         lib.hp_create.assert_not_called()
         lib.disconnect.assert_called_once()
+
+    def test_handshake_poll_error_releases_the_connection(self):
+        hp, lib = self.headphones([mdr.RESULT_OK])
+        hp.pump.side_effect = mdr.MDRError("protocol polling failed")
+        with self.assertRaisesRegex(mdr.MDRError, "protocol polling failed"):
+            hp.open(settle=0)
+        lib.disconnect.assert_called_once()
+        lib.conn_destroy.assert_called_once()
+        lib.hp_sync.assert_not_called()
 
 
 class ExplainTest(unittest.TestCase):

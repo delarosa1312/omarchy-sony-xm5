@@ -279,6 +279,7 @@ class Library:
         self.hp_poll = sig(self.mdr, "mdrHeadphonesPoll", u32, p, p)
         self.hp_ready = sig(self.mdr, "mdrHeadphonesIsReady", u32, p)
         self.hp_dirty = sig(self.mdr, "mdrHeadphonesIsDirty", u32, p)
+        self.hp_dirty = sig(self.mdr, "mdrHeadphonesIsDirty", u32, p)
         self.batteries = sig(self.mdr, "mdrHeadphonesGetBatteries", u32, p,
                              C.POINTER(Battery), C.POINTER(u32))
         self.get_noise = sig(self.mdr, "mdrHeadphonesGetNoiseControl", u32, p,
@@ -390,25 +391,39 @@ class Headphones:
             self.close()
             raise MDRError(f"could not create headphones object: {lib.result(r)}")
 
-        lib.hp_init(self._hp)
-        deadline = time.monotonic() + ready_timeout
-        while time.monotonic() < deadline:
-            self.pump()
-            if lib.hp_ready(self._hp):
-                break
-        else:
-            self.close()
-            raise MDRError("headphones never became ready (is another device holding the link?)")
+        try:
+            lib.hp_init(self._hp)
+            deadline = time.monotonic() + ready_timeout
+            while time.monotonic() < deadline:
+                self.pump()
+                if lib.hp_ready(self._hp):
+                    break
+            else:
+                raise MDRError("headphones never became ready (is another device holding the link?)")
 
-        lib.hp_sync(self._hp)
-        deadline = time.monotonic() + settle
-        while time.monotonic() < deadline:
-            self.pump(50)
+            lib.hp_sync(self._hp)
+            deadline = time.monotonic() + settle
+            while time.monotonic() < deadline:
+                self.pump(50)
+        except MDRError:
+            # Polling can now report protocol errors during initialization too.
+            # Do not leave a half-open session holding the headset's channel.
+            self.close()
+            raise
 
     def pump(self, timeout_ms=100):
         """Drive both the socket and the protocol state machine once."""
         self.lib.conn_poll(self._conn, timeout_ms)
-        self.lib.hp_poll(self._hp, C.cast(self._event, C.c_void_p))
+        result = self.lib.hp_poll(self._hp, C.cast(self._event, C.c_void_p))
+        if result not in (RESULT_OK, RESULT_INPROGRESS):
+            raise MDRError(f"protocol polling failed: {self.lib.result(result)}")
+        # RequestCommit does not queue a request when another task is active.
+        # Preserve staged edits by submitting them once that task completes,
+        # as the upstream client does in its event loop.
+        if self.lib.hp_ready(self._hp) and self.lib.hp_dirty(self._hp):
+            result = self.lib.hp_commit(self._hp)
+            if result not in (RESULT_OK, RESULT_INPROGRESS):
+                raise MDRError(f"pending write failed: {self.lib.result(result)}")
 
     def get_batteries(self, maximum=4):
         count = C.c_uint32(maximum)

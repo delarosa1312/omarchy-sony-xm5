@@ -70,6 +70,14 @@ BarWidget {
     function toggle(): void { root.togglePanel() }
     function cycle(): void { if (root.panel) root.panel.cycleMode() }
     function mode(name: string): void { if (root.panel) root.panel.setMode(name) }
+    function status(): string {
+      return JSON.stringify({
+        session: root.panel ? root.panel.session : false,
+        connected: root.panel ? root.panel.commandConnected : false,
+        mode: root.panel ? root.panel.mode : "",
+        updated: root.panel ? root.panel.state.updated : null
+      })
+    }
   }
 
   WidgetButton {

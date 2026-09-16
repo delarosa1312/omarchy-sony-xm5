@@ -1,0 +1,23 @@
+diff --git a/libmdr/src/Details.hpp b/libmdr/src/Details.hpp
+index 14fdd96..e143093 100644
+--- a/libmdr/src/Details.hpp
++++ b/libmdr/src/Details.hpp
+@@ -11 +11 @@
+-#include <time.h>
++#include <chrono>
+@@ -150 +150 @@ namespace mdr
+-            clock_t tick;
++            std::chrono::steady_clock::time_point tick;
+@@ -163 +163 @@ namespace mdr
+-                    h = std::move(handle), tick = clock();
++                    h = std::move(handle), tick = std::chrono::steady_clock::now();
+diff --git a/libmdr/src/Headphones.cpp b/libmdr/src/Headphones.cpp
+index 94b3e1b..ea1c717 100644
+--- a/libmdr/src/Headphones.cpp
++++ b/libmdr/src/Headphones.cpp
+@@ -222 +222 @@ namespace mdr
+-            clock_t now = clock();
++            const auto now = std::chrono::steady_clock::now();
+@@ -226 +226 @@ namespace mdr
+-                auto duration = (now - awaiter.tick) / (CLOCKS_PER_SEC / 1000u);
++                const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - awaiter.tick).count();

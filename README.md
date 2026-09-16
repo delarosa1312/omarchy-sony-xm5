@@ -73,6 +73,12 @@ could abandon an asynchronous Bluetooth connection after a single 100 ms
 poll timeout, then incorrectly suggest that another device held the channel.
 The corrected binding waits for the full connection deadline.
 
+For changes that stop applying during an active session, use release
+`1.1.3-4` or later: it submits edits made while another command is in flight
+and fixes libmdr's ACK retry timer to use elapsed time instead of CPU time.
+Restart `mdrctld` after upgrading. The widget also needs the subscription
+flush fix from this repository; update the installed plugin as well.
+
 That is the only install path, and it is enough: Omarchy is Arch, so everyone
 who can install the widget already has `makepkg`. The package puts the daemon
 in `/usr/bin` and its libraries in `/usr/lib/mdrctl`, which the user the
@@ -208,6 +214,6 @@ build it elsewhere; there is simply no script here that will do it for you.
 ## License
 
 MIT. The upstream library it builds, [SonyHeadphonesClient][upstream], is MIT
-too, and is not modified -- only a commit is pinned.
+too. Its commit is pinned and a small patch fixes its retry clock.
 
 [upstream]: https://github.com/mos9527/SonyHeadphonesClient
