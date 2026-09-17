@@ -1,6 +1,6 @@
 # Maintainer: delarosa1312 <65927195+delarosa1312@users.noreply.github.com>
 pkgname=mdrctl
-pkgver=1.1.4
+pkgver=1.1.5
 pkgrel=1
 pkgdesc="Control Sony MDR headphones (WH-1000XM5, WF-1000XM5) from Linux, with an Omarchy bar widget"
 arch=('x86_64' 'aarch64')
@@ -66,8 +66,10 @@ package() {
   install -Dm755 "$pkgname/daemon/bin/mdrctl" "$pkgdir/usr/bin/mdrctl"
   install -Dm755 "$pkgname/daemon/bin/mdrctld" "$pkgdir/usr/bin/mdrctld"
 
-  install -Dm644 "$pkgname/daemon/systemd-user/mpris-proxy.service" \
-    "$pkgdir/usr/lib/systemd/user/mpris-proxy.service"
+  # No mpris-proxy.service here: bluez-utils already ships one at that exact
+  # path, and a package may not claim a file another package owns -- pacman
+  # refuses the install outright. bluez-utils is a dependency, so the unit is
+  # always present; it just needs enabling, which mdrctl.install says.
   # The unit template carries @PYTHON@/@MDRCTLD@/@ARGS@ so a checkout can point
   # them at itself. Installed, both are fixed absolute paths and libmdr is found
   # at /usr/lib/mdrctl without being told, so there are no arguments to pass.

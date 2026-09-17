@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.delarosa1312.sony-xm5",
   "name": "Sony XM5",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "author": "delarosa1312",
   "license": "MIT",
   "description": "Battery, noise control and equaliser for the Sony WH-1000XM5 and WF-1000XM5. Also needs the mdrctl daemon from the same repository: a bar widget cannot hold a Bluetooth control session on its own. Installing the widget alone is safe -- it appears with no readings and says what is missing -- but it needs one more command to do anything. See the README.",
