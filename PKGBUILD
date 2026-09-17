@@ -1,12 +1,16 @@
 # Maintainer: delarosa1312 <65927195+delarosa1312@users.noreply.github.com>
 pkgname=mdrctl
-pkgver=1.1.3
+pkgver=1.1.4
 pkgrel=1
 pkgdesc="Control Sony MDR headphones (WH-1000XM5, WF-1000XM5) from Linux, with an Omarchy bar widget"
 arch=('x86_64' 'aarch64')
 url="https://github.com/delarosa1312/omarchy-sony-xm5"
 license=('MIT')
-depends=('python' 'bluez' 'bluez-utils' 'dbus')
+# fmt and bluez-libs are what the two shared objects actually link against
+# (libfmt.so.12, libbluetooth.so.3); neither is pulled in by bluez or
+# bluez-utils, so without them here the package installs and then fails to load
+# its own libraries on a machine that happens not to have them.
+depends=('python' 'bluez' 'bluez-utils' 'bluez-libs' 'dbus' 'fmt')
 makedepends=('cmake' 'ninja' 'git' 'gcc')
 optdepends=('omarchy: the bar widget this daemon drives')
 install=mdrctl.install
@@ -28,11 +32,22 @@ source=(
 sha256sums=('SKIP' 'SKIP')
 
 build() {
+  # __FILE__ ends up in assertion strings, so without this the objects carry a
+  # few thousand copies of whatever directory makepkg happened to build in.
+  export CXXFLAGS="$CXXFLAGS -ffile-prefix-map=$srcdir=."
+  export CFLAGS="$CFLAGS -ffile-prefix-map=$srcdir=."
+
   # MDR_BUILD_CLIENT=OFF skips the GLFW/ImGui GUI: only the protocol and the
   # Bluetooth transport are wanted, as shared objects for ctypes to load.
+  #
+  # SKIP_RPATH because the build tree's own fmt would otherwise be baked in as
+  # a RUNPATH: the objects would point at a directory makepkg deletes, and
+  # resolve only by falling through to the system copy. Better to depend on
+  # the system fmt deliberately -- see depends -- than to work by accident.
   cmake -S "$srcdir/SonyHeadphonesClient" -B "$srcdir/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DMDR_BUILD_CLIENT=OFF \
+    -DCMAKE_SKIP_RPATH=ON \
     -DBUILD_SHARED_LIBS=ON
   cmake --build "$srcdir/build"
 }
